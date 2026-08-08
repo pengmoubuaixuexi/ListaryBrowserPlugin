@@ -15,6 +15,7 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <map>
@@ -26,6 +27,7 @@
 
 namespace {
 constexpr std::size_t kMaxRequestBytes = 16 * 1024;
+constexpr std::size_t kMaxCachedMappings = 512;
 
 std::string EncodeUtf8(std::wstring_view value) {
     if (value.empty()) return {};
@@ -233,7 +235,7 @@ struct ListarySuggestionServer::Impl {
             error = L"该 Listary 结果已经过期，请重新输入关键词后选择。";
             return std::nullopt;
         }
-        return found->second;
+        return found->second.result;
     }
 
     void ServerLoop() {
@@ -324,18 +326,30 @@ struct ListarySuggestionServer::Impl {
 
     void CacheMappings(std::wstring_view prefix, std::wstring_view query, const SearchResponse& completed) {
         const auto normalizedPrefix = ToLowerInvariant(prefix);
-        const auto keyPrefix = normalizedPrefix + L"\n";
         std::lock_guard lock(mappingMutex);
-        for (auto item = mappings.begin(); item != mappings.end();) {
-            if (item->first.rfind(keyPrefix, 0) == 0) item = mappings.erase(item);
-            else ++item;
-        }
         for (const auto& result : completed.results) {
             const auto display = DisplayText(result);
-            if (!display.empty()) mappings.try_emplace(MappingKey(normalizedPrefix, display), result);
+            if (!display.empty()) StoreMapping(MappingKey(normalizedPrefix, display), result);
         }
         if (!completed.results.empty() && !query.empty()) {
-            mappings.insert_or_assign(MappingKey(normalizedPrefix, query), completed.results.front());
+            StoreMapping(MappingKey(normalizedPrefix, query), completed.results.front());
+        }
+    }
+
+    struct CachedMapping {
+        HistoryResult result;
+        std::uint64_t sequence = 0;
+    };
+
+    void StoreMapping(std::wstring key, const HistoryResult& result) {
+        const auto sequence = ++mappingSequence;
+        mappings.insert_or_assign(key, CachedMapping{result, sequence});
+        mappingOrder.emplace_back(std::move(key), sequence);
+        while (mappingOrder.size() > kMaxCachedMappings) {
+            auto oldest = std::move(mappingOrder.front());
+            mappingOrder.pop_front();
+            const auto found = mappings.find(oldest.first);
+            if (found != mappings.end() && found->second.sequence == oldest.second) mappings.erase(found);
         }
     }
 
@@ -347,7 +361,9 @@ struct ListarySuggestionServer::Impl {
     std::condition_variable responseReady;
     std::optional<SearchResponse> response;
     mutable std::mutex mappingMutex;
-    std::map<std::wstring, HistoryResult> mappings;
+    std::map<std::wstring, CachedMapping> mappings;
+    std::deque<std::pair<std::wstring, std::uint64_t>> mappingOrder;
+    std::uint64_t mappingSequence = 0;
     std::atomic<bool> stopping{false};
     SOCKET listenSocket = INVALID_SOCKET;
     std::thread serverThread;

@@ -18,9 +18,9 @@
 
 - Release Rebuild：通过。
 - Chrome 正在运行时，`g` 查询下拉：20 条，通过。
-- 10 万行隔离历史库 Unicode 子串查询：最终回归为 54.670 ms。
-- Chrome 冷查询：270.872 ms，包含锁定原库检测和 12.3 MB 快照复制。
-- Chrome 同会话快照复用查询：2.425 ms。
+- 10 万行隔离历史库 Unicode 子串查询：最终回归为 32.411 ms。
+- Chrome 冷查询：281.124 ms，包含锁定原库检测和 12.3 MB 快照复制。
+- Chrome 同会话快照复用查询：3.202 ms。
 - Chrome 下拉端到端：94.511 ms。
 - 查询期私有工作集：28,733,440 字节（27.40 MiB），低于 30 MiB 目标。
 
@@ -29,8 +29,8 @@
 - 接入改动：仅将已有 `[browser.edge]` 的 `Enabled` 改为 `true`；Chrome 与 Edge 使用同一 `ChromiumHistoryAdapter`。
 - Release Rebuild：通过。
 - Edge 正在运行时，`e` 查询下拉：20 条，通过。
-- Edge 冷查询：353.706 ms，包含锁定原库检测和 63.8 MB 快照复制。
-- Edge 同会话快照复用查询：5.464 ms。
+- Edge 冷查询：373.320 ms，包含锁定原库检测和 63.8 MB 快照复制。
+- Edge 同会话快照复用查询：2.143 ms。
 - Chrome/Edge EXE 与配置文件发现：通过。
 - 原生子进程捕获确认 `CreateProcessW` 正确传递 `--profile-directory` 和含空格、引号、特殊字符的 URL：通过。
 
@@ -45,8 +45,8 @@
 | 隐藏空闲 CPU | 0% | 接近 0% | 通过 |
 | 温呼出 | 15.553 ms | 100 ms | 通过 |
 | 100 次呼出/隐藏 | 28,839,936 B → 29,495,296 B | 增长不超过 1 MiB | 通过 |
-| 10 万行查询 | 54.670 ms | 100 ms | 通过 |
-| EXE + INI | 526,076 B | 10 MiB | 通过 |
+| 10 万行查询 | 32.411 ms | 100 ms | 通过 |
+| EXE + INI | 526,588 B | 10 MiB | 通过 |
 | 正常退出残留进程 | 0 | 0 | 通过 |
 
 ## 已确认的未达标原因
@@ -67,5 +67,6 @@
 - 仅监听 `127.0.0.1:32119` 的原生建议服务按需查询 SQLite；Chrome `github` 返回 18 条、Edge `microsoft` 返回 9 条，中文 JSON 通过。
 - Listary 6 的 `Custom` 网页搜索提示已真实显示 Chrome 历史结果。
 - 当前用户 `bhl://` 协议把 Listary 选择转发给已有单实例；Windows 规范化 URI 回归通过，Chrome 结果固定由 Chrome 打开。
+- 近期映射缓存上限为 512 条且仅驻留内存；模拟 Listary 在显示结果后追加一次无匹配建议请求，先前结果仍能打开，不再误报过期。
 - 注册与注销均为显式命令，不需要管理员权限；协议命令当前指向便携版 EXE。
 - 原生 Edit/ListView 改为首次显示时才创建：自动化回归的 Listary-only 启动私有工作集 1,691,648 B，完成 Chrome+Edge 查询后的独立实测为 2,568,192 B；未加载搜狗或 TextInput 模块，满足 15 MiB 空闲目标。
