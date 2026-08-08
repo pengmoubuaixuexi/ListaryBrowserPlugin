@@ -100,7 +100,7 @@ int wmain(int argc, wchar_t** argv) {
     Check(FindWindowW(kWindowClass, nullptr) == nullptr, "no pre-existing launcher instance");
     if (failures) return 1;
 
-    std::wstring command = L"\"" + std::wstring(argv[1]) + L"\" --query \"g\"";
+    std::wstring command = L"\"" + std::wstring(argv[1]) + L"\"";
     STARTUPINFOW startup{sizeof(startup)};
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(argv[1], command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
@@ -115,13 +115,33 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(process.hProcess);
         return 1;
     }
+    Sleep(800);
+    Check(!IsWindowVisible(window), "Listary-only startup keeps the native window hidden");
     HWND edit = FindWindowExW(window, nullptr, L"Edit", nullptr);
     HWND list = FindWindowExW(window, nullptr, WC_LISTVIEWW, nullptr);
+    Check(edit == nullptr && list == nullptr, "Listary-only startup defers native search controls");
+    const auto listaryIdlePrivateWorkingSet = PrivateWorkingSet(process.hProcess);
+    std::cout << "METRIC listary_idle_private_working_set_bytes=" << listaryIdlePrivateWorkingSet << '\n';
+    Check(listaryIdlePrivateWorkingSet > 0 && listaryIdlePrivateWorkingSet <= 15ULL * 1024 * 1024,
+        "Listary-only private working set <= 15 MB target");
+
+    Check(LaunchQuery(argv[1], L"g"), "first --query invocation reaches the hidden instance");
+    const auto visibleDeadline = GetTickCount64() + 5000;
+    while (GetTickCount64() < visibleDeadline && !IsWindowVisible(window)) Sleep(10);
+    Check(IsWindowVisible(window), "first --query invocation shows the native fallback window");
+    edit = nullptr;
+    list = nullptr;
+    const auto controlsDeadline = GetTickCount64() + 5000;
+    while (GetTickCount64() < controlsDeadline && (!edit || !list)) {
+        edit = FindWindowExW(window, nullptr, L"Edit", nullptr);
+        list = FindWindowExW(window, nullptr, WC_LISTVIEWW, nullptr);
+        if (!edit || !list) Sleep(10);
+    }
     Check(edit != nullptr && list != nullptr, "native Edit and ListView controls exist");
     Check(GetClassLongPtrW(window, GCLP_HICON) != 0, "embedded application icon is assigned to the window");
     const auto initialQueryDeadline = GetTickCount64() + 5000;
     while (GetTickCount64() < initialQueryDeadline && ListView_GetItemCount(list) == 0) Sleep(10);
-    Check(ListView_GetItemCount(list) > 0, "first --query invocation starts the app and populates Chrome history");
+    Check(ListView_GetItemCount(list) > 0, "first --query invocation populates Chrome history");
 
     SendMessageW(window, WM_CLOSE, 0, 0);
     Sleep(800);

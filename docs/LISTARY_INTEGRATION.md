@@ -1,59 +1,59 @@
-# Listary 集成
+# Listary 原生结果集成
 
-本机 Listary 6.3.5.94 支持“命令”把关键字后的输入作为 `"{query}"` 传给外部程序。Browser History Launcher 提供 `--query` 参数，并通过单实例消息把查询转发给已经运行的进程。
+本机 Listary 6.3.5.94 可以把自定义网页搜索提示显示为 Listary 自己的下拉结果。本工具仅在 `127.0.0.1:32119` 提供按需建议接口；它不建立后台索引，也不持续扫描浏览器数据库。
 
-## 推荐配置：两个短命令
+选择结果时使用当前用户的 `bhl://` 协议把结果交回本工具，再由结果来源浏览器及 Profile 打开。这样不会经过 Windows 默认浏览器。
 
-在 Listary 托盘菜单中打开“选项 → 命令”，分别新增：
+## 首次注册
 
-### Chrome 历史
+保持 `BrowserHistoryLauncher.exe` 与 INI 在同一目录，执行：
 
-- 关键字：`gh`（如果确认没有命令冲突，也可以使用 `g`）
+```powershell
+.\BrowserHistoryLauncher.exe --register-listary-protocol
+```
+
+注册位置为 `HKEY_CURRENT_USER\Software\Classes\bhl`，不需要管理员权限。移动 EXE 后需要从新位置重新执行注册。撤销时执行：
+
+```powershell
+.\BrowserHistoryLauncher.exe --unregister-listary-protocol
+```
+
+## Chrome 历史
+
+在 Listary“选项 → 网页搜索”中新增：
+
+- 关键字：`gh`
 - 标题：`Chrome 历史`
-- 路径：`E:\Program Files (x86)\BrowserHistoryLauncher\build\portable\BrowserHistoryLauncher.exe`
-- 参数：`--query "g {query}"`
-- 工作目录：`E:\Program Files (x86)\BrowserHistoryLauncher\build\portable`
-- 静默：不勾选
-- 管理员：不勾选
+- Url：`bhl://open?prefix=g&selection={query}`
+- 搜索提示：`Custom`
+- 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=g&q={query}`
+- 启用：勾选
 
-之后在 Listary 输入 `gh github` 并执行，即会把 `g github` 传给本工具。
+输入 `gh github`，选择历史结果并按 Enter，即使用来源 Chrome Profile 打开。
 
-### Edge 历史
+## Edge 历史
 
-- 关键字：`eh`（如果确认没有命令冲突，也可以使用 `e`）
+在 Listary“选项 → 网页搜索”中新增：
+
+- 关键字：`eh`
 - 标题：`Edge 历史`
-- 路径：与上面相同
-- 参数：`--query "e {query}"`
-- 工作目录：与上面相同
-- 静默：不勾选
-- 管理员：不勾选
+- Url：`bhl://open?prefix=e&selection={query}`
+- 搜索提示：`Custom`
+- 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=e&q={query}`
+- 启用：勾选
 
-## 备选配置：单一命令
+输入 `eh microsoft`，选择历史结果并按 Enter，即使用来源 Edge Profile 打开。
 
-- 关键字：`bh`
-- 参数：`--query "{query}"`
+## 运行要求与边界
 
-使用时输入 `bh g github` 或 `bh e baidu`。
-
-如果以后只通过 Listary 呼出，可把 `BrowserHistoryLauncher.ini` 中的 `Hotkey` 改为 `none`，然后重启本工具，避免保留额外的全局快捷键。
-
-## 当前边界
-
-Listary 的官方命令接口只能启动程序并传入 `"{query}"`，不能读取子进程标准输出或接收自定义结果数组。因此当前流程是：
-
-```text
-Listary 输入 → --query 参数 → 本工具查询 → 本工具原生下拉框显示
-```
-
-不能可靠实现：
-
-```text
-Listary 输入 → 浏览器历史直接成为 Listary 自身的结果行
-```
-
-Listary 6 安装目录中的 `FileAppPlugin` 用于文件管理器/文件对话框集成，并非搜索结果提供器。旧版论坛存在未公开的 JavaScript 插件接口，但没有当前官方 SDK、稳定性或兼容性保证。Listary V7 在 2026 年 7 月的公开路线图中仍把 Browser history plugin 列为后续计划，因此本项目不依赖这些内部接口。
+- 本工具必须保持运行，否则 Listary 无法访问本地建议接口，也没有本次查询的“显示项 → URL/Profile”临时映射。
+- 可以将本工具快捷方式放入当前用户的“启动”目录；本项目不安装 Windows 服务，也不需要管理员权限。
+- 建议映射只保存在内存中。工具重启后，需要重新在 Listary 输入查询再选择结果。
+- 监听套接字只绑定 IPv4 loopback `127.0.0.1`，不接受局域网或公网连接。
+- 普通 Listary“命令”模式和 `--query` 仍保留，作为原生窗口回退入口。
+- 如果只使用 Listary，可把 INI 中的 `Hotkey` 设置为 `none`；Listary 自己的呼出快捷键不受此项影响。
 
 参考：
 
 - Listary 官方命令文档：https://help.listary.com/options-commands
-- Listary V7 Browser history plugin 路线图：https://discussion.listary.com/t/listary-v7-beta-is-here-the-launcher-now-recommends-plus-a-new-engine-multi-select-fresh-themes-updated-to-7-0-0-7-on-july-20/10259
+- Listary V7 Browser history plugin 路线图：https://www.listary.com/v7

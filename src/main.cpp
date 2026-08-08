@@ -3,6 +3,7 @@
 #include "chromium_history_adapter.h"
 #include "config_store.h"
 #include "history_search_service.h"
+#include "listary_suggestion_server.h"
 #include "query_parser.h"
 #include "resource.h"
 #include "snapshot_manager.h"
@@ -30,6 +31,8 @@ constexpr UINT kShowMessage = WM_APP + 11;
 constexpr UINT kResultsMessage = WM_APP + 12;
 constexpr UINT kExitMessage = WM_APP + 13;
 constexpr ULONG_PTR kQueryCopyData = 0x42484C51;
+constexpr ULONG_PTR kListaryOpenCopyData = 0x42484C4F;
+constexpr wchar_t kProtocolKey[] = L"Software\\Classes\\bhl";
 constexpr int kEditId = 100;
 constexpr int kListId = 101;
 constexpr int kStatusId = 102;
@@ -52,6 +55,54 @@ std::wstring WindowText(HWND window) {
     return text;
 }
 
+bool SetRegistryString(HKEY key, const wchar_t* name, std::wstring_view value, std::wstring& error) {
+    const std::wstring terminated(value);
+    const auto bytes = static_cast<DWORD>((terminated.size() + 1) * sizeof(wchar_t));
+    const LSTATUS status = RegSetValueExW(key, name, 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(terminated.c_str()), bytes);
+    if (status == ERROR_SUCCESS) return true;
+    error = L"无法写入 bhl:// 当前用户协议，错误码 " + std::to_wstring(status) + L"。";
+    return false;
+}
+
+bool SetProtocolSubkey(std::wstring_view relativePath, std::wstring_view value, std::wstring& error) {
+    const std::wstring path = std::wstring(kProtocolKey) + L"\\" + std::wstring(relativePath);
+    HKEY key = nullptr;
+    const LSTATUS status = RegCreateKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, nullptr, 0,
+        KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (status != ERROR_SUCCESS) {
+        error = L"无法创建 bhl:// 当前用户协议，错误码 " + std::to_wstring(status) + L"。";
+        return false;
+    }
+    const bool ok = SetRegistryString(key, nullptr, value, error);
+    RegCloseKey(key);
+    return ok;
+}
+
+bool RegisterListaryProtocol(const std::filesystem::path& executable, std::wstring& error) {
+    HKEY key = nullptr;
+    const LSTATUS status = RegCreateKeyExW(HKEY_CURRENT_USER, kProtocolKey, 0, nullptr, 0,
+        KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (status != ERROR_SUCCESS) {
+        error = L"无法创建 bhl:// 当前用户协议，错误码 " + std::to_wstring(status) + L"。";
+        return false;
+    }
+    bool ok = SetRegistryString(key, nullptr, L"URL:Browser History Launcher", error) &&
+        SetRegistryString(key, L"URL Protocol", L"", error);
+    RegCloseKey(key);
+    if (!ok) return false;
+    if (!SetProtocolSubkey(L"DefaultIcon", L"\"" + executable.wstring() + L"\",0", error)) return false;
+    const std::wstring command = L"\"" + executable.wstring() + L"\" --listary-open \"%1\"";
+    return SetProtocolSubkey(L"shell\\open\\command", command, error);
+}
+
+bool UnregisterListaryProtocol(std::wstring& error) {
+    const LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, kProtocolKey);
+    if (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND) return true;
+    error = L"无法移除 bhl:// 当前用户协议，错误码 " + std::to_wstring(status) + L"。";
+    return false;
+}
+
 class App {
 public:
     App(HINSTANCE instance, AppConfig config, std::filesystem::path configPath)
@@ -62,7 +113,7 @@ public:
               if (!window_ || !PostMessageW(window_, kResultsMessage, 0, reinterpret_cast<LPARAM>(payload))) {
                   delete payload;
               }
-          }) {}
+          }), listaryServer_(config_) {}
 
     ~App() {
         RemoveTrayIcon();
@@ -95,6 +146,10 @@ public:
             return false;
         }
         AddTrayIcon();
+        std::wstring listaryError;
+        if (!listaryServer_.Start(listaryError)) {
+            MessageBoxW(window_, listaryError.c_str(), L"Listary 建议服务未启动", MB_OK | MB_ICONWARNING);
+        }
         if (showImmediately) Show();
         return true;
     }
@@ -113,6 +168,20 @@ public:
         if (!edit_) return;
         SetWindowTextW(edit_, std::wstring(query).c_str());
         BeginSearch();
+    }
+
+    void OpenListaryUri(std::wstring_view uri) {
+        std::wstring error;
+        const auto item = listaryServer_.ResolveUri(uri, error);
+        if (!item) {
+            MessageBoxW(window_, error.c_str(), L"无法打开 Listary 历史结果", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        const auto* browser = registry_.FindById(item->browserId);
+        if (!browser || !BrowserLauncher::OpenUrl(*browser, item->profileDirectory, item->url, error)) {
+            if (error.empty()) error = L"结果来源浏览器配置已不可用。";
+            MessageBoxW(window_, error.c_str(), L"无法打开 Listary 历史结果", MB_OK | MB_ICONERROR);
+        }
     }
 
 private:
@@ -171,14 +240,17 @@ private:
     }
 
     LRESULT OnCopyData(const COPYDATASTRUCT* data) {
-        if (!data || data->dwData != kQueryCopyData || !data->lpData || data->cbData < sizeof(wchar_t) ||
+        if (!data || (data->dwData != kQueryCopyData && data->dwData != kListaryOpenCopyData) ||
+            !data->lpData || data->cbData < sizeof(wchar_t) ||
             data->cbData > 32768 * sizeof(wchar_t) || data->cbData % sizeof(wchar_t) != 0) {
             return FALSE;
         }
         const auto count = static_cast<std::size_t>(data->cbData / sizeof(wchar_t));
         const auto* text = static_cast<const wchar_t*>(data->lpData);
         if (text[count - 1] != L'\0') return FALSE;
-        ShowWithQuery(std::wstring_view(text, count - 1));
+        const std::wstring_view value(text, count - 1);
+        if (data->dwData == kQueryCopyData) ShowWithQuery(value);
+        else OpenListaryUri(value);
         return TRUE;
     }
 
@@ -217,7 +289,7 @@ private:
             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
         smallFont_ = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        return CreateSearchControls();
+        return font_ != nullptr && smallFont_ != nullptr;
     }
 
     void Layout(int width, int height) {
@@ -424,6 +496,7 @@ private:
     SnapshotManager snapshots_;
     ChromiumHistoryAdapter adapter_;
     HistorySearchService searchService_;
+    ListarySuggestionServer listaryServer_;
     std::vector<HistoryResult> results_;
     std::uint64_t generation_ = 0;
 };
@@ -467,6 +540,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     InitCommonControlsEx(&controls);
 
     const auto requestedQuery = ArgumentValue(L"--query");
+    const auto listaryOpenUri = ArgumentValue(L"--listary-open");
+    if (HasArgument(L"--register-listary-protocol") || HasArgument(L"--unregister-listary-protocol")) {
+        std::wstring error;
+        const bool registering = HasArgument(L"--register-listary-protocol");
+        const bool ok = registering ? RegisterListaryProtocol(ExecutableDirectory() / L"BrowserHistoryLauncher.exe", error) :
+                                      UnregisterListaryProtocol(error);
+        if (!ok || !HasArgument(L"--quiet")) {
+            const std::wstring message = ok ?
+                (registering ? L"已为当前用户注册 bhl:// 协议。" : L"已移除当前用户的 bhl:// 协议。") : error;
+            MessageBoxW(nullptr, message.c_str(), L"Browser History Launcher", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+        }
+        return ok ? 0 : 4;
+    }
     HANDLE mutex = CreateMutexW(nullptr, FALSE, kMutexName);
     if (!mutex) return 1;
     const bool alreadyRunning = GetLastError() == ERROR_ALREADY_EXISTS;
@@ -474,6 +560,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
             if (HasArgument(L"--exit")) {
                 PostMessageW(existing, kExitMessage, 0, 0);
+            } else if (listaryOpenUri) {
+                COPYDATASTRUCT data{};
+                data.dwData = kListaryOpenCopyData;
+                data.cbData = static_cast<DWORD>((listaryOpenUri->size() + 1) * sizeof(wchar_t));
+                data.lpData = const_cast<wchar_t*>(listaryOpenUri->c_str());
+                DWORD_PTR ignored = 0;
+                SendMessageTimeoutW(existing, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&data),
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 3000, &ignored);
             } else if (requestedQuery) {
                 COPYDATASTRUCT data{};
                 data.dwData = kQueryCopyData;
@@ -510,6 +604,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         return 3;
     }
     if (requestedQuery) app.ShowWithQuery(*requestedQuery);
+    if (listaryOpenUri) app.OpenListaryUri(*listaryOpenUri);
     const int result = app.Run();
     CloseHandle(mutex);
     return result;

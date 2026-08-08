@@ -6,6 +6,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <cstdint>
 
 class SnapshotManager {
 public:
@@ -28,6 +29,7 @@ private:
     std::filesystem::path SnapshotPathFor(const std::filesystem::path& source) const;
 
     std::filesystem::path tempDirectory_;
+    std::uint64_t instanceId_ = 0;
     std::map<std::filesystem::path, Entry> entries_;
     std::mutex mutex_;
 };

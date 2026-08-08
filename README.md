@@ -12,7 +12,9 @@
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
-也可以通过 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"`。本机 Listary 6 的完整设置值见 `docs\LISTARY_INTEGRATION.md`；Listary 负责输入和传参，搜索结果仍显示在本工具的原生下拉框中。
+也可以把浏览器历史直接显示为 Listary 的网页搜索提示：本工具通过仅监听 loopback 的按需接口返回结果，并用当前用户的 `bhl://` 协议固定交回来源浏览器和 Profile 打开。完整设置值见 `docs\LISTARY_INTEGRATION.md`。普通 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"` 仍作为原生窗口回退方式保留。
+
+Listary 集成依赖本工具进程保持运行；可将 EXE 快捷方式放入当前用户“启动”目录。仅使用 Listary 时不会创建原生 Edit/ListView，也不会加载输入法模块。
 
 托盘菜单包含“显示”“设置”“退出”。“设置”会打开 INI；修改后需要重启程序。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
 

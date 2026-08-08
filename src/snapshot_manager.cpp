@@ -3,6 +3,7 @@
 #include "text_util.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <sstream>
@@ -31,6 +32,8 @@ void DeleteSnapshotFamily(const std::filesystem::path& path) {
 }
 
 SnapshotManager::SnapshotManager() {
+    static std::atomic<std::uint64_t> nextInstanceId{0};
+    instanceId_ = nextInstanceId.fetch_add(1, std::memory_order_relaxed) + 1;
     wchar_t buffer[MAX_PATH + 1]{};
     const DWORD length = GetTempPathW(MAX_PATH, buffer);
     tempDirectory_ = length > 0 ? std::filesystem::path(buffer) / L"BrowserHistoryLauncher" :
@@ -46,7 +49,8 @@ SnapshotManager::~SnapshotManager() {
 
 std::filesystem::path SnapshotManager::SnapshotPathFor(const std::filesystem::path& source) const {
     std::wostringstream name;
-    name << L"bhl-" << GetCurrentProcessId() << L'-' << std::hex << std::hash<std::wstring>{}(source.wstring())
+    name << L"bhl-" << GetCurrentProcessId() << L'-' << instanceId_ << L'-' << std::hex
+         << std::hash<std::wstring>{}(source.wstring())
          << L".sqlite";
     return tempDirectory_ / name.str();
 }
