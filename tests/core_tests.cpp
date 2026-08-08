@@ -99,6 +99,15 @@ int wmain(int argc, wchar_t** argv) {
     std::error_code ignored;
     std::filesystem::remove_all(tempRoot, ignored);
     std::filesystem::create_directories(tempRoot);
+    const auto noHotkeyIni = tempRoot / L"no-hotkey.ini";
+    {
+        std::ofstream noHotkey(noHotkeyIni, std::ios::binary);
+        noHotkey << "[app]\nHotkey=none\n";
+    }
+    std::wstring noHotkeyWarning;
+    const auto noHotkeyConfig = ConfigStore::Load(noHotkeyIni, noHotkeyWarning);
+    Check(noHotkeyConfig.hotkeyVirtualKey == 0 && noHotkeyConfig.hotkeyModifiers == 0,
+        "Hotkey=none disables the native global hotkey");
     {
         std::ofstream state(tempRoot / L"Local State", std::ios::binary);
         state << "{\"profile\":{\"info_cache\":{\"Default\":{},\"Profile 1\":{}}}}";

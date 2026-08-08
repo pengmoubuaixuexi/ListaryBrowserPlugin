@@ -43,10 +43,11 @@
     <ClInclude Include="src\browser_launcher.h" /><ClInclude Include="src\browser_registry.h" />
     <ClInclude Include="src\chromium_history_adapter.h" /><ClInclude Include="src\config_store.h" />
     <ClInclude Include="src\history_search_service.h" /><ClInclude Include="src\model.h" />
-    <ClInclude Include="src\query_parser.h" />
+    <ClInclude Include="src\query_parser.h" /><ClInclude Include="src\resource.h" />
     <ClInclude Include="src\snapshot_manager.h" /><ClInclude Include="src\text_util.h" />
   </ItemGroup>
-  <ItemGroup><None Include="BrowserHistoryLauncher.ini" /></ItemGroup>
+  <ItemGroup><ResourceCompile Include="src\app.rc" /></ItemGroup>
+  <ItemGroup><None Include="assets\app.ico" /><None Include="assets\app-icon.png" /><None Include="BrowserHistoryLauncher.ini" /></ItemGroup>
   <Target Name="CopyPortableConfig" AfterTargets="Build">
     <Copy SourceFiles="BrowserHistoryLauncher.ini" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>

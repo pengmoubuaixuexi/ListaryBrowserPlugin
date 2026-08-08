@@ -77,6 +77,19 @@ double CpuPercent(HANDLE process, DWORD sampleMs) {
     const double used100ns = static_cast<double>((k2.QuadPart - k1.QuadPart) + (u2.QuadPart - u1.QuadPart));
     return used100ns / (static_cast<double>(sampleMs) * 10000.0 * info.dwNumberOfProcessors) * 100.0;
 }
+
+bool LaunchQuery(const wchar_t* application, std::wstring_view query) {
+    std::wstring command = L"\"" + std::wstring(application) + L"\" --query \"" + std::wstring(query) + L"\"";
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(application, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+        return false;
+    }
+    CloseHandle(process.hThread);
+    const DWORD wait = WaitForSingleObject(process.hProcess, 5000);
+    CloseHandle(process.hProcess);
+    return wait == WAIT_OBJECT_0;
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -87,7 +100,7 @@ int wmain(int argc, wchar_t** argv) {
     Check(FindWindowW(kWindowClass, nullptr) == nullptr, "no pre-existing launcher instance");
     if (failures) return 1;
 
-    std::wstring command = L"\"" + std::wstring(argv[1]) + L"\" --show";
+    std::wstring command = L"\"" + std::wstring(argv[1]) + L"\" --query \"g\"";
     STARTUPINFOW startup{sizeof(startup)};
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(argv[1], command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
@@ -105,6 +118,10 @@ int wmain(int argc, wchar_t** argv) {
     HWND edit = FindWindowExW(window, nullptr, L"Edit", nullptr);
     HWND list = FindWindowExW(window, nullptr, WC_LISTVIEWW, nullptr);
     Check(edit != nullptr && list != nullptr, "native Edit and ListView controls exist");
+    Check(GetClassLongPtrW(window, GCLP_HICON) != 0, "embedded application icon is assigned to the window");
+    const auto initialQueryDeadline = GetTickCount64() + 5000;
+    while (GetTickCount64() < initialQueryDeadline && ListView_GetItemCount(list) == 0) Sleep(10);
+    Check(ListView_GetItemCount(list) > 0, "first --query invocation starts the app and populates Chrome history");
 
     SendMessageW(window, WM_CLOSE, 0, 0);
     Sleep(800);
@@ -129,7 +146,7 @@ int wmain(int argc, wchar_t** argv) {
     Check(edit != nullptr && list != nullptr, "search controls available after hide");
 
     const auto queryStart = std::chrono::steady_clock::now();
-    SendMessageW(edit, WM_CHAR, L'g', 1);
+    Check(LaunchQuery(argv[1], L"g"), "--query command forwards Chrome query to existing instance");
     int itemCount = 0;
     const auto deadline = GetTickCount64() + 5000;
     while (GetTickCount64() < deadline) {
@@ -152,8 +169,7 @@ int wmain(int argc, wchar_t** argv) {
               << " query_private_working_set_bytes=" << queryPrivateWorkingSet << '\n';
     Check(queryPrivateWorkingSet > 0 && queryPrivateWorkingSet <= 30ULL * 1024 * 1024, "query private working set <= 30 MB target");
 
-    SendMessageW(edit, EM_SETSEL, 0, -1);
-    SendMessageW(edit, WM_CHAR, L'e', 1);
+    Check(LaunchQuery(argv[1], L"e"), "--query command forwards Edge query to existing instance");
     Sleep(1200);
     const int edgeItemCount = ListView_GetItemCount(list);
     std::cout << "METRIC edge_dropdown_results=" << edgeItemCount << '\n';

@@ -12,6 +12,8 @@
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
+也可以通过 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"`。本机 Listary 6 的完整设置值见 `docs\LISTARY_INTEGRATION.md`；Listary 负责输入和传参，搜索结果仍显示在本工具的原生下拉框中。
+
 托盘菜单包含“显示”“设置”“退出”。“设置”会打开 INI；修改后需要重启程序。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
 
 ## 构建和测试
@@ -43,6 +45,7 @@ Release 使用 C++20、静态 MSVC CRT 和 Windows SDK 自带 `winsqlite3.lib`�
 INI 的 `[app]` 支持：
 
 - `Hotkey`：修饰键加 Space、字母或数字，例如 `Alt+Shift+Space`。
+- `Hotkey=none`：禁用本工具自己的全局快捷键，适合只通过 Listary 调用。
 - `MaxResults`：1–100，默认 20。
 - `DebounceMs`：限制为 60–120，默认 90。
 

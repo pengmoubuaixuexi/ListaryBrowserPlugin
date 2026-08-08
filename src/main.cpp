@@ -4,6 +4,7 @@
 #include "config_store.h"
 #include "history_search_service.h"
 #include "query_parser.h"
+#include "resource.h"
 #include "snapshot_manager.h"
 
 #include <Windows.h>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,6 +29,7 @@ constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kShowMessage = WM_APP + 11;
 constexpr UINT kResultsMessage = WM_APP + 12;
 constexpr UINT kExitMessage = WM_APP + 13;
+constexpr ULONG_PTR kQueryCopyData = 0x42484C51;
 constexpr int kEditId = 100;
 constexpr int kListId = 101;
 constexpr int kStatusId = 102;
@@ -72,7 +75,9 @@ public:
         windowClass.lpfnWndProc = &App::WindowProc;
         windowClass.hInstance = instance_;
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        windowClass.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP_ICON));
+        windowClass.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APP_ICON),
+            IMAGE_ICON, 16, 16, LR_SHARED));
         windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         windowClass.lpszClassName = kWindowClass;
         if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
@@ -81,7 +86,8 @@ public:
             L"浏览器历史启动器", WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_BORDER,
             CW_USEDEFAULT, CW_USEDEFAULT, 780, 440, nullptr, nullptr, instance_, this);
         if (!window_) return false;
-        if (!RegisterHotKey(window_, kHotkeyId, config_.hotkeyModifiers, config_.hotkeyVirtualKey)) {
+        if (config_.hotkeyVirtualKey != 0 &&
+            !RegisterHotKey(window_, kHotkeyId, config_.hotkeyModifiers, config_.hotkeyVirtualKey)) {
             MessageBoxW(nullptr, L"无法注册全局快捷键，请修改 BrowserHistoryLauncher.ini 后重启。",
                 L"浏览器历史启动器", MB_OK | MB_ICONERROR);
             DestroyWindow(window_);
@@ -100,6 +106,13 @@ public:
             DispatchMessageW(&message);
         }
         return static_cast<int>(message.wParam);
+    }
+
+    void ShowWithQuery(std::wstring_view query) {
+        Show();
+        if (!edit_) return;
+        SetWindowTextW(edit_, std::wstring(query).c_str());
+        BeginSearch();
     }
 
 private:
@@ -142,18 +155,31 @@ private:
         case WM_TIMER: if (wParam == kDebounceTimer) BeginSearch(); return 0;
         case WM_COMMAND: return OnCommand(LOWORD(wParam), HIWORD(wParam));
         case WM_NOTIFY: return OnNotify(reinterpret_cast<NMHDR*>(lParam));
+        case WM_COPYDATA: return OnCopyData(reinterpret_cast<const COPYDATASTRUCT*>(lParam));
         case WM_CLOSE: Hide(); return 0;
         case kTrayMessage: OnTrayMessage(lParam); return 0;
         case kShowMessage: Show(); return 0;
         case kExitMessage: DestroyWindow(window_); return 0;
         case kResultsMessage: ApplyResults(reinterpret_cast<SearchResponse*>(lParam)); return 0;
         case WM_DESTROY:
-            UnregisterHotKey(window_, kHotkeyId);
+            if (config_.hotkeyVirtualKey != 0) UnregisterHotKey(window_, kHotkeyId);
             RemoveTrayIcon();
             PostQuitMessage(0);
             return 0;
         }
         return DefWindowProcW(window_, message, wParam, lParam);
+    }
+
+    LRESULT OnCopyData(const COPYDATASTRUCT* data) {
+        if (!data || data->dwData != kQueryCopyData || !data->lpData || data->cbData < sizeof(wchar_t) ||
+            data->cbData > 32768 * sizeof(wchar_t) || data->cbData % sizeof(wchar_t) != 0) {
+            return FALSE;
+        }
+        const auto count = static_cast<std::size_t>(data->cbData / sizeof(wchar_t));
+        const auto* text = static_cast<const wchar_t*>(data->lpData);
+        if (text[count - 1] != L'\0') return FALSE;
+        ShowWithQuery(std::wstring_view(text, count - 1));
+        return TRUE;
     }
 
     bool CreateSearchControls() {
@@ -345,7 +371,7 @@ private:
         tray_.uID = kTrayId;
         tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         tray_.uCallbackMessage = kTrayMessage;
-        tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        tray_.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP_ICON));
         wcscpy_s(tray_.szTip, L"浏览器历史启动器");
         trayAdded_ = Shell_NotifyIconW(NIM_ADD, &tray_) != FALSE;
     }
@@ -417,6 +443,22 @@ bool HasArgument(std::wstring_view argument) {
     }
     return found;
 }
+
+std::optional<std::wstring> ArgumentValue(std::wstring_view argument) {
+    int count = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    std::optional<std::wstring> value;
+    if (arguments) {
+        for (int i = 1; i + 1 < count; ++i) {
+            if (CompareStringOrdinal(arguments[i], -1, argument.data(), static_cast<int>(argument.size()), TRUE) == CSTR_EQUAL) {
+                value = arguments[i + 1];
+                break;
+            }
+        }
+        LocalFree(arguments);
+    }
+    return value;
+}
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
@@ -424,12 +466,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&controls);
 
+    const auto requestedQuery = ArgumentValue(L"--query");
     HANDLE mutex = CreateMutexW(nullptr, FALSE, kMutexName);
     if (!mutex) return 1;
     const bool alreadyRunning = GetLastError() == ERROR_ALREADY_EXISTS;
     if (alreadyRunning) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
-            PostMessageW(existing, HasArgument(L"--exit") ? kExitMessage : kShowMessage, 0, 0);
+            if (HasArgument(L"--exit")) {
+                PostMessageW(existing, kExitMessage, 0, 0);
+            } else if (requestedQuery) {
+                COPYDATASTRUCT data{};
+                data.dwData = kQueryCopyData;
+                data.cbData = static_cast<DWORD>((requestedQuery->size() + 1) * sizeof(wchar_t));
+                data.lpData = const_cast<wchar_t*>(requestedQuery->c_str());
+                DWORD_PTR ignored = 0;
+                SendMessageTimeoutW(existing, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&data),
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 3000, &ignored);
+            } else {
+                PostMessageW(existing, kShowMessage, 0, 0);
+            }
         }
         CloseHandle(mutex);
         return 0;
@@ -450,10 +505,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     App app(instance, std::move(config), configPath);
-    if (!app.Create(HasArgument(L"--show"))) {
+    if (!app.Create(HasArgument(L"--show") || requestedQuery.has_value())) {
         CloseHandle(mutex);
         return 3;
     }
+    if (requestedQuery) app.ShowWithQuery(*requestedQuery);
     const int result = app.Run();
     CloseHandle(mutex);
     return result;

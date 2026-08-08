@@ -35,6 +35,12 @@ std::vector<std::filesystem::path> ReadPaths(const std::filesystem::path& path,
 }
 
 void ParseHotkey(std::wstring_view text, AppConfig& config, std::wstring& warning) {
+    const auto normalizedText = ToLowerInvariant(Trim(text));
+    if (normalizedText == L"none" || normalizedText == L"off" || normalizedText == L"disabled") {
+        config.hotkeyModifiers = 0;
+        config.hotkeyVirtualKey = 0;
+        return;
+    }
     UINT modifiers = MOD_NOREPEAT;
     UINT key = 0;
     for (auto part : Split(text, L'+')) {
