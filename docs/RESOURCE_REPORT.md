@@ -122,7 +122,7 @@
 
 ## 1.0.0 安装包构建与隔离验证（2026-08-09）
 
-- 使用 Inno Setup 7.0.2 从当前 Release x64 构建 `ListaryBrowserPlugin-Setup-x64.exe`，大小 2,500,685 字节，SHA-256 为 `0006F40457D1418C6224201C0D53263839A30E8EF163D179F59FFA9DE4E0A39B`。
+- 使用 Inno Setup 7.0.2 从当前 Release x64 构建 `ListaryBrowserPlugin-Setup-x64.exe`；安装器通过 `Local\BrowserHistoryLauncher.Singleton` 检测已运行的便携版或旧安装版，避免新旧路径同时存在时由旧进程继续接管请求。
 - 静默安装到项目 `build\installer-test\Listary Browser Plugin`，明确关闭桌面和开机启动测试任务；EXE、INI、卸载程序及 Listary 文档均存在，安装期间 `bhl://` 正确指向隔离目录。
 - 从隔离安装目录启动 EXE 后，`127.0.0.1:32119/health` 返回成功，中文查询“安装测试”返回 1 条地址栏动作；随后 `--exit` 正常结束进程。
 - 静默卸载后隔离安装目录与安装器创建的 `bhl://` 注册均被移除。卸载前后真实 Listary `Preferences.json` 的 SHA-256 均为 `0DD00765C215DE0DB2F47D5AE9B710C842221CDBAA3B09951F07FBD8788232CF`，未修改用户配置；Listary 自动重启路径通过。

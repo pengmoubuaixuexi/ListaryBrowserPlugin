@@ -24,6 +24,7 @@ MinVersion=10.0
 ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=no
+AppMutex=Local\BrowserHistoryLauncher.Singleton
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription=Listary浏览器插件安装程序
 
