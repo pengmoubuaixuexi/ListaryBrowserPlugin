@@ -24,7 +24,7 @@ BEGIN
             VALUE "FileDescription", "Listary Browser History Plugin"
             VALUE "FileVersion", "1.0.0.0"
             VALUE "InternalName", "BrowserHistoryLauncher"
-            VALUE "LegalCopyright", "Copyright (c) 2026 BrowserHistoryLauncher contributors"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Tao Peng"
             VALUE "OriginalFilename", "BrowserHistoryLauncher.exe"
             VALUE "ProductName", "Listary Browser History Plugin"
             VALUE "ProductVersion", "1.0.0.0"

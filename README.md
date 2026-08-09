@@ -128,3 +128,7 @@ Browser History Launcher is an unofficial, privacy-focused Listary extension for
 The runtime is native C++20/Win32, does not upload browsing data, does not build a background full-history index, and uses about 2.24 MiB private working set in the measured Listary-only idle scenario. Listary 6.3.5.94 was verified locally, and a real user has confirmed compatibility with Listary V7.
 
 Download `ListaryBrowserPlugin-Setup-x64.exe` from [GitHub Releases](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest), install it without administrator privileges, then use **Configure Listary** to select detected browsers and keywords. This is a community project and is not affiliated with or endorsed by Listary.
+
+## License
+
+本项目采用 [MIT License](LICENSE)。The project is licensed under the [MIT License](LICENSE).

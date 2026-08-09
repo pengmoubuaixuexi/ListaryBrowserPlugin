@@ -23,6 +23,7 @@ Copy-Item -LiteralPath (Join-Path $release 'BrowserHistoryLauncher.exe') -Destin
 Copy-Item -LiteralPath (Join-Path $root 'BrowserHistoryLauncher.ini') -Destination $portable -Force
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $portable -Force
 Copy-Item -LiteralPath (Join-Path $root 'CHANGELOG.md') -Destination $portable -Force
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $portable -Force
 Copy-Item -LiteralPath (Join-Path $root 'THIRD_PARTY_NOTICES.md') -Destination $portable -Force
 # Keep the root-level report for compatibility with packages produced before the docs folder existed.
 Copy-Item -LiteralPath (Join-Path $root 'docs\RESOURCE_REPORT.md') -Destination $portable -Force
