@@ -5,3 +5,5 @@
 程序使用 Microsoft Windows SDK 头文件和导入库，并在运行时调用 Windows 系统组件，包括 `winsqlite3.dll`、Win32、Common Controls、Shell 和 PSAPI。这些组件由 Windows 提供，不随便携包再分发。
 
 应用图标由 OpenAI 图像生成工具为本项目生成，不包含 Chrome、Edge、Listary 或其他第三方品牌标志。
+
+可选 Windows 安装包使用 Inno Setup 构建。Inno Setup 仅为构建期工具，不会被 Browser History Launcher 在运行时加载。许可证见 https://jrsoftware.org/files/is/license.txt。

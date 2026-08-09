@@ -4,6 +4,21 @@
 
 选择结果时使用当前用户的 `bhl://` 协议把结果交回本工具，再由结果来源浏览器及 Profile 打开。这样不会经过 Windows 默认浏览器。
 
+## 图形安装器（推荐）
+
+运行 `ListaryBrowserPlugin-Setup-x64.exe` 后，安装向导会提供：
+
+- 自定义安装位置；
+- Chrome/Edge 启用选择；
+- 每个浏览器的 Listary 关键字；
+- 可选的 Listary 快速配置；
+- 开机自动启动和桌面快捷方式；
+- 安装完成后立即启动。
+
+快速配置通过配置结构探测兼容 Listary 6/7，不按版本号强行写入。它只修改 `WebSearch.Items.Insertions/Updates` 兼容结构，修改前创建带时间戳的 `Preferences.json.bhl-backup-*`。如果 Listary 正在运行，安装器会要求先从托盘完全退出；如果结构未知或关键字被其他自定义项目占用，则停止自动写入并保留手动配置方式。
+
+选择 `g` 时，Listary 内置 Google 网页搜索可能占用相同关键字。快速配置会禁用该内置项，并记录是否由本工具完成；卸载时只在确认为本工具修改的情况下恢复。卸载不会删除配置备份。
+
 ## 首次注册
 
 把完整 portable 目录解压到一个不会随意移动的位置，然后执行一次：
@@ -76,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\configure-startup.ps1 -Remove
 
 ## 交付给其他人
 
-不要只发送单个 EXE。Listary 集成至少需要完整 portable 目录，其中包括：
+优先发送 `ListaryBrowserPlugin-Setup-x64.exe`。如果需要免安装版本，不要只发送单个 EXE；Listary 集成至少需要完整 portable 目录，其中包括：
 
 - `BrowserHistoryLauncher.exe`
 - `BrowserHistoryLauncher.ini`

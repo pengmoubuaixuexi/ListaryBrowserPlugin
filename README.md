@@ -6,6 +6,14 @@
 
 ## 运行
 
+推荐使用图形安装器：
+
+```text
+build\installer\ListaryBrowserPlugin-Setup-x64.exe
+```
+
+安装向导可以选择安装位置、启用的浏览器及其 Listary 关键字，并可选择快速配置 Listary、开机自动启动和桌面快捷方式。安装器采用当前用户安装，不需要管理员权限。快速配置会先备份 Listary 的 `Preferences.json`；检测到未知配置结构或关键字冲突时不会写入，并提示改用手动配置。
+
 1. 使用 `build\Release\BrowserHistoryLauncher.exe`，并让 `BrowserHistoryLauncher.ini` 与 EXE 位于同一目录。
 2. 启动后程序隐藏在托盘中。
 3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录。
@@ -18,18 +26,19 @@ Listary 集成依赖本工具进程保持运行；可将 EXE 快捷方式放入�
 
 开机启动、Listary 配置备份与恢复见 `docs\LISTARY_INTEGRATION.md`；Listary、uTools、Snipaste 的键盘工作流分工及后续扩展建议见 `docs\DESKTOP_KEYBOARD_WORKFLOW.md`。
 
-交付给其他人时请发送完整的 `build\portable` 目录，而不是单独发送 EXE。接收者运行一次 `scripts\setup-current-user.ps1` 后，再按集成文档配置 Listary 的 `g/e` 网页搜索。
+交付给其他人时优先发送安装器。`build\portable` 目录仍作为免安装版本保留，不能只发送单个 EXE。
 
 托盘菜单包含“显示”“设置”“退出”。“设置”会打开 INI；修改后需要重启程序。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
 
 ## 构建和测试
 
-需要 Visual Studio 2022 Build Tools、MSVC v143 和 Windows 10/11 SDK。CMake 不是构建依赖。
+需要 Visual Studio 2022 Build Tools、MSVC v143 和 Windows 10/11 SDK。CMake 不是构建依赖。仅生成图形安装器时需要 Inno Setup 6/7；它不是程序运行依赖。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
 ```
 
 Release 使用 C++20、静态 MSVC CRT 和 Windows SDK 自带 `winsqlite3.lib`。程序只依赖 Windows 系统 DLL，不捆绑第三方运行时。资源实测及当前未达标项见 `docs\RESOURCE_REPORT.md`。

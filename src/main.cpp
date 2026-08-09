@@ -3,6 +3,7 @@
 #include "chromium_history_adapter.h"
 #include "config_store.h"
 #include "history_search_service.h"
+#include "listary_configurator.h"
 #include "listary_suggestion_server.h"
 #include "query_parser.h"
 #include "resource.h"
@@ -541,6 +542,37 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     const auto requestedQuery = ArgumentValue(L"--query");
     const auto listaryOpenUri = ArgumentValue(L"--listary-open");
+    if (HasArgument(L"--configure-listary") || HasArgument(L"--remove-listary-integration")) {
+        const bool quiet = HasArgument(L"--quiet");
+        if (ListaryConfigurator::IsListaryRunning()) {
+            if (!quiet) {
+                MessageBoxW(nullptr, L"请先从托盘完全退出 Listary，然后重试。",
+                    L"Listary 浏览器插件", MB_OK | MB_ICONWARNING);
+            }
+            return 6;
+        }
+        const auto directory = ExecutableDirectory();
+        const auto preferences = ListaryConfigurator::DetectPreferences();
+        const auto statePath = directory / L"ListaryIntegrationState.ini";
+        ListaryConfigurationResult result;
+        if (HasArgument(L"--configure-listary")) {
+            std::wstring warning;
+            const auto config = ConfigStore::Load(directory / L"BrowserHistoryLauncher.ini", warning);
+            std::wstring validationError;
+            if (!ConfigStore::Validate(config, validationError)) {
+                result.message = validationError;
+            } else {
+                result = ListaryConfigurator::Configure(config, preferences, statePath);
+            }
+        } else {
+            result = ListaryConfigurator::Remove(preferences, statePath);
+        }
+        if (!quiet) {
+            MessageBoxW(nullptr, result.message.c_str(), L"Listary 浏览器插件",
+                MB_OK | (result.ok ? MB_ICONINFORMATION : MB_ICONERROR));
+        }
+        return result.ok ? 0 : (preferences.empty() ? 5 : 7);
+    }
     if (HasArgument(L"--register-listary-protocol") || HasArgument(L"--unregister-listary-protocol")) {
         std::wstring error;
         const bool registering = HasArgument(L"--register-listary-protocol");

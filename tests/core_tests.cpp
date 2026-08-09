@@ -1,6 +1,8 @@
 #include "browser_launcher.h"
 #include "chromium_history_adapter.h"
 #include "config_store.h"
+#include "json_document.h"
+#include "listary_configurator.h"
 #include "query_parser.h"
 #include "snapshot_manager.h"
 #include "text_util.h"
@@ -67,6 +69,48 @@ bool CreateHistory(const std::filesystem::path& path, int rows, bool fullSchema)
     sqlite3_close(db);
     return ok;
 }
+
+bool WriteUtf8File(const std::filesystem::path& path, std::string_view contents) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    return static_cast<bool>(output);
+}
+
+std::string ReadFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+std::size_t CountBhlInsertions(const JsonValue& root) {
+    const auto* webSearch = root.Find(L"WebSearch");
+    const auto* items = webSearch ? webSearch->Find(L"Items") : nullptr;
+    const auto* insertions = items ? items->Find(L"Insertions") : nullptr;
+    if (!insertions || insertions->type() != JsonValue::Type::Array) return 0;
+    std::size_t count = 0;
+    for (const auto& insertion : insertions->array()) {
+        const auto* item = insertion.Find(L"Item");
+        const auto* url = item ? item->Find(L"Url") : nullptr;
+        if (url && url->type() == JsonValue::Type::String && StartsWithInsensitive(url->text(), L"bhl://open?")) ++count;
+    }
+    return count;
+}
+
+std::size_t CountDisabledGoogleUpdates(const JsonValue& root) {
+    const auto* webSearch = root.Find(L"WebSearch");
+    const auto* items = webSearch ? webSearch->Find(L"Items") : nullptr;
+    const auto* updates = items ? items->Find(L"Updates") : nullptr;
+    if (!updates || updates->type() != JsonValue::Type::Array) return 0;
+    std::size_t count = 0;
+    for (const auto& update : updates->array()) {
+        const auto* id = update.Find(L"Id");
+        const auto* properties = update.Find(L"UpdatedProperties");
+        const auto* enabled = properties ? properties->Find(L"Enabled") : nullptr;
+        if (id && id->type() == JsonValue::Type::String &&
+            id->text() == L"ecb51462-cb27-4b89-ae53-333b4550f489" &&
+            enabled && enabled->type() == JsonValue::Type::Boolean && !enabled->boolean()) ++count;
+    }
+    return count;
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -108,6 +152,63 @@ int wmain(int argc, wchar_t** argv) {
     const auto noHotkeyConfig = ConfigStore::Load(noHotkeyIni, noHotkeyWarning);
     Check(noHotkeyConfig.hotkeyVirtualKey == 0 && noHotkeyConfig.hotkeyModifiers == 0,
         "Hotkey=none disables the native global hotkey");
+    wchar_t selfPathBuffer[32768]{};
+    GetModuleFileNameW(nullptr, selfPathBuffer, 32768);
+
+    JsonValue jsonRoundTrip;
+    std::wstring jsonError;
+    Check(ParseJsonUtf8("{\"text\":\"\\u4e2d\\u6587\",\"array\":[true,false,null,-1.25e2]}",
+        jsonRoundTrip, jsonError), "JSON parser accepts Listary-compatible values");
+    JsonValue reparsedJson;
+    Check(ParseJsonUtf8(SerializeJsonUtf8(jsonRoundTrip), reparsedJson, jsonError) &&
+        reparsedJson.Find(L"text") && reparsedJson.Find(L"text")->text() == L"中文",
+        "JSON serializer preserves Unicode values");
+
+    const auto listaryRoot = tempRoot / L"Listary";
+    const auto listaryPreferences = listaryRoot / L"Preferences.json";
+    const auto listaryState = listaryRoot / L"ListaryIntegrationState.ini";
+    std::filesystem::create_directories(listaryRoot);
+    const std::string listarySample =
+        "{\"WebSearch\":{\"Items\":{\"Deletions\":[],\"Moves\":[],\"Insertions\":["
+        "{\"Index\":-1,\"Info\":null,\"Item\":{\"Keyword\":\"wiki\",\"Url\":\"https://example.test/?q={query}\","
+        "\"Title\":\"Wiki\",\"Icon\":{\"Path\":\"\",\"TypeName\":\"Path\"},\"SuggestionProvider\":\"None\",\"SuggestionUrl\":\"\"}}"
+        "],\"Updates\":[]}}}";
+    Check(WriteUtf8File(listaryPreferences, listarySample), "create isolated Listary preferences");
+    AppConfig listaryConfig;
+    BrowserDefinition listaryChrome;
+    listaryChrome.id = L"chrome";
+    listaryChrome.name = L"Google Chrome";
+    listaryChrome.prefix = L"g";
+    listaryChrome.executableCandidates = {selfPathBuffer};
+    listaryChrome.userDataCandidates = {tempRoot};
+    BrowserDefinition listaryEdge = listaryChrome;
+    listaryEdge.id = L"edge";
+    listaryEdge.name = L"Microsoft Edge";
+    listaryEdge.prefix = L"e";
+    listaryConfig.browsers = {listaryChrome, listaryEdge};
+    const auto configuredListary = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
+    Check(configuredListary.ok && std::filesystem::exists(configuredListary.backupPath),
+        "Listary configuration creates a backup");
+    JsonValue configuredDocument;
+    Check(ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 2 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        "Listary configuration adds browser entries and resolves built-in g conflict");
+    const auto configuredAgain = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
+    Check(configuredAgain.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 2,
+        "Listary configuration is idempotent");
+    const auto removedListary = ListaryConfigurator::Remove(listaryPreferences, listaryState);
+    Check(removedListary.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 0 && CountDisabledGoogleUpdates(configuredDocument) == 0,
+        "Listary integration removal restores plugin-owned Google state");
+
+    const std::string conflictSample =
+        "{\"WebSearch\":{\"Items\":{\"Insertions\":[{\"Item\":{\"Keyword\":\"g\",\"Url\":\"https://other.test/{query}\"}}],\"Updates\":[]}}}";
+    Check(WriteUtf8File(listaryPreferences, conflictSample), "create Listary keyword conflict");
+    const std::string beforeConflict = ReadFile(listaryPreferences);
+    const auto conflictedListary = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
+    Check(!conflictedListary.ok && ReadFile(listaryPreferences) == beforeConflict,
+        "Listary keyword conflict fails without modifying preferences");
     {
         std::ofstream state(tempRoot / L"Local State", std::ios::binary);
         state << "{\"profile\":{\"info_cache\":{\"Default\":{},\"Profile 1\":{}}}}";
@@ -117,8 +218,6 @@ int wmain(int argc, wchar_t** argv) {
     Check(CreateHistory(defaultHistory, 100000, true), "create isolated 100k history database");
     Check(CreateHistory(profileHistory, 1, true), "create second profile database");
 
-    wchar_t selfPathBuffer[32768]{};
-    GetModuleFileNameW(nullptr, selfPathBuffer, 32768);
     BrowserDefinition testBrowser;
     testBrowser.id = L"test";
     testBrowser.name = L"Test Chromium";
