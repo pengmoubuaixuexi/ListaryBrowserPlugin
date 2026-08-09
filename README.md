@@ -20,7 +20,7 @@ build\installer\ListaryBrowserPlugin-Setup-x64.exe
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
-主窗口右上角的“配置 Listary”会重新检测 INI 中定义且已经安装的浏览器。选择浏览器后可设置启用状态、Listary 关键字和图标文件位置；应用会更新 INI、当前用户 `bhl://` 协议和 Listary `Preferences.json`。写入前必须从托盘完全退出 Listary，程序会创建时间戳备份，完成后重新启动 Listary。
+主窗口右上角的“配置 Listary”会重新读取 Windows 已注册浏览器，并验证其本地历史库是否符合当前 Chromium 适配器。通过验证的浏览器会自动加入下拉框，不要求预先写入 INI；选择后可设置启用状态、Listary 关键字和图标文件位置。应用会更新 INI、当前用户 `bhl://` 协议和 Listary `Preferences.json`。写入前必须从托盘完全退出 Listary，程序会创建时间戳备份，完成后重新启动 Listary。
 
 也可以把浏览器历史直接显示为 Listary 的网页搜索提示：本工具通过仅监听 loopback 的按需接口返回结果，并用当前用户的 `bhl://` 协议固定交回来源浏览器和 Profile 打开。完整设置值见 `docs\LISTARY_INTEGRATION.md`。普通 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"` 仍作为原生窗口回退方式保留。
 
@@ -79,7 +79,7 @@ INI 的 `[app]` 支持：
 - `ProfileArgument`：启动参数模板，`{profile}` 替换为来源配置文件目录名。
 - `EnabledProfiles`：`*` 表示所有发现的配置文件，也可用 `|` 指定，例如 `Default|Profile 1`。
 
-默认目录已声明 Chrome、Edge、Brave、Vivaldi 和 Chromium；配置页只列出已安装项目，以及当前已启用但暂时找不到 EXE、可用于停用的项目。增加其他采用标准目录结构的 Chromium 浏览器只需增加一个 `browser.*` 节并分配唯一前缀，不需要修改 UI、路由器或 SQLite 查询代码。前缀冲突或不支持的引擎会拒绝应用并显示错误。
+默认目录仍声明 Chrome、Edge、Brave、Vivaldi 和 Chromium。配置页还会枚举 Windows 的 `StartMenuInternet` 注册项，读取真实启动命令和图标，并在当前用户目录中浅层定位 `Local State`/`User Data`；只有实际找到且通过 `History.urls` 必需字段校验的 Chromium 浏览器才会作为新项目加入。Firefox、Internet Explorer 等已注册但尚无适配器的浏览器不会错误显示为可配置项。本机已在没有夸克 INI 定义的情况下自动发现并验证夸克浏览器。前缀冲突或不支持的引擎会拒绝应用并显示错误。
 
 ## 数据读取和隐私
 

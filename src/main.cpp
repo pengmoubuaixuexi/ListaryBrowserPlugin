@@ -1,3 +1,4 @@
+#include "browser_discovery.h"
 #include "browser_launcher.h"
 #include "browser_registry.h"
 #include "chromium_history_adapter.h"
@@ -547,7 +548,9 @@ private:
     }
 
     void ShowListarySettings() {
-        const auto selection = ListarySettingsDialog::Show(instance_, window_, config_);
+        const auto discovery = BrowserDiscovery::Scan(config_);
+        BrowserDiscovery::MergeCompatible(config_, discovery);
+        const auto selection = ListarySettingsDialog::Show(instance_, window_, config_, discovery.Summary());
         if (!selection) return;
 
         AppConfig candidate = config_;

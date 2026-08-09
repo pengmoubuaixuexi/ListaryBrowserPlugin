@@ -93,6 +93,7 @@ bool LaunchQuery(const wchar_t* application, std::wstring_view query) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (argc < 2) {
         std::cerr << "usage: UiSmokeTests <BrowserHistoryLauncher.exe>\n";
         return 2;
@@ -152,16 +153,57 @@ int wmain(int argc, wchar_t** argv) {
         if (settingsWindow) {
             Check(GetClassLongPtrW(settingsWindow, GCLP_HICON) != 0,
                 "configuration dialog uses the embedded application icon");
+            RECT settingsClient{};
+            GetClientRect(settingsWindow, &settingsClient);
+            const UINT settingsDpi = GetDpiForWindow(settingsWindow);
+            std::cout << "METRIC settings_dpi=" << settingsDpi
+                      << " settings_client_width=" << settingsClient.right
+                      << " settings_client_height=" << settingsClient.bottom << '\n';
+            Check(settingsClient.right >= 678 && settingsClient.bottom >= 508,
+                "configuration dialog provides its designed client area");
+            HWND applyButton = nullptr;
+            const auto applyDeadline = GetTickCount64() + 5000;
+            while (GetTickCount64() < applyDeadline && !applyButton) {
+                applyButton = FindWindowExW(settingsWindow, nullptr, L"Button", L"保存并应用");
+                if (!applyButton) Sleep(10);
+            }
+            Check(applyButton != nullptr,
+                "configuration dialog exposes a clear primary action");
             HWND browserCombo = nullptr;
             LRESULT browserCount = 0;
             const auto browserDeadline = GetTickCount64() + 5000;
-            while (GetTickCount64() < browserDeadline && browserCount < 2) {
+            while (GetTickCount64() < browserDeadline && browserCount < 3) {
                 browserCombo = FindWindowExW(settingsWindow, nullptr, WC_COMBOBOXW, nullptr);
                 if (browserCombo) browserCount = SendMessageW(browserCombo, CB_GETCOUNT, 0, 0);
-                if (browserCount < 2) Sleep(10);
+                if (browserCount < 3) Sleep(10);
             }
-            Check(browserCombo != nullptr && browserCount >= 2,
-                "browser dropdown automatically detects installed configured browsers");
+            Check(browserCombo != nullptr && browserCount >= 3,
+                "browser dropdown contains system-discovered compatible browsers");
+            Check(browserCombo && SendMessageW(browserCombo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+                reinterpret_cast<LPARAM>(L"Quark")) != CB_ERR,
+                "browser dropdown discovers registered Quark without a predefined INI section");
+            RECT comboRect{};
+            RECT applyRect{};
+            if (browserCombo) GetWindowRect(browserCombo, &comboRect);
+            if (applyButton) GetWindowRect(applyButton, &applyRect);
+            POINT clientOrigin{};
+            ClientToScreen(settingsWindow, &clientOrigin);
+            const int clientRight = clientOrigin.x + settingsClient.right;
+            const int clientBottom = clientOrigin.y + settingsClient.bottom;
+            bool allControlsInside = true;
+            for (HWND child = GetWindow(settingsWindow, GW_CHILD); child;
+                 child = GetWindow(child, GW_HWNDNEXT)) {
+                if (!IsWindowVisible(child)) continue;
+                RECT childRect{};
+                GetWindowRect(child, &childRect);
+                if (childRect.left < clientOrigin.x || childRect.top < clientOrigin.y ||
+                    childRect.right > clientRight || childRect.bottom > clientBottom) {
+                    allControlsInside = false;
+                    break;
+                }
+            }
+            Check(browserCombo && applyButton && allControlsInside,
+                "all configuration controls remain inside the client area");
             SendMessageW(settingsWindow, WM_CLOSE, 0, 0);
         }
     }

@@ -1,3 +1,4 @@
+#include "browser_discovery.h"
 #include "browser_launcher.h"
 #include "chromium_history_adapter.h"
 #include "config_store.h"
@@ -149,6 +150,45 @@ int wmain(int argc, wchar_t** argv) {
     AppConfig config = ConfigStore::Load(ini, warning);
     std::wstring error;
     Check(ConfigStore::Validate(config, error), "INI configuration validates");
+    const auto discoveryStarted = std::chrono::steady_clock::now();
+    const auto discovery = BrowserDiscovery::Scan(config);
+    const auto discoveryElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - discoveryStarted).count();
+    const auto discoveredCompatible = static_cast<std::size_t>(std::count_if(
+        discovery.entries.begin(), discovery.entries.end(),
+        [](const BrowserDiscoveryEntry& entry) { return entry.chromiumCompatible; }));
+    std::cout << "METRIC registered_browsers=" << discovery.entries.size()
+              << " compatible_chromium_browsers=" << discoveredCompatible
+              << " system_discovery_ms=" << discoveryElapsed << '\n';
+    for (const auto& entry : discovery.entries) {
+        std::cout << "DISCOVERY name=" << WideToUtf8(entry.name)
+                  << " exe=" << WideToUtf8(entry.executable.wstring())
+                  << " compatible=" << (entry.chromiumCompatible ? 1 : 0)
+                  << " detail=" << WideToUtf8(entry.detail) << '\n';
+    }
+    Check(!discovery.entries.empty(), "Windows registered-browser discovery returns entries");
+    auto systemDiscoveredConfig = config;
+    BrowserDiscovery::MergeCompatible(systemDiscoveredConfig, discovery);
+    const auto chromeDiscovery = std::find_if(discovery.entries.begin(), discovery.entries.end(),
+        [](const BrowserDiscoveryEntry& entry) {
+            return entry.chromiumCompatible && entry.executable.filename() == L"chrome.exe";
+        });
+    const auto edgeDiscovery = std::find_if(discovery.entries.begin(), discovery.entries.end(),
+        [](const BrowserDiscoveryEntry& entry) {
+            return entry.chromiumCompatible && entry.executable.filename() == L"msedge.exe";
+        });
+    Check(chromeDiscovery != discovery.entries.end(), "system discovery validates Chrome history structure");
+    Check(edgeDiscovery != discovery.entries.end(), "system discovery validates Edge history structure");
+    const auto quarkRegistration = std::find_if(discovery.entries.begin(), discovery.entries.end(),
+        [](const BrowserDiscoveryEntry& entry) { return entry.executable.filename() == L"quark.exe"; });
+    if (quarkRegistration != discovery.entries.end()) {
+        Check(quarkRegistration->chromiumCompatible,
+            "system discovery validates registered Quark Chromium history structure");
+        Check(std::any_of(systemDiscoveredConfig.browsers.begin(), systemDiscoveredConfig.browsers.end(), [](const BrowserDefinition& browser) {
+            return std::any_of(browser.executableCandidates.begin(), browser.executableCandidates.end(),
+                [](const std::filesystem::path& path) { return path.filename() == L"quark.exe"; });
+        }), "compatible Quark browser is merged into runtime configuration");
+    }
     auto duplicate = config;
     if (duplicate.browsers.size() >= 2) {
         duplicate.browsers[1].enabled = true;
@@ -256,6 +296,9 @@ int wmain(int argc, wchar_t** argv) {
     const auto profileHistory = tempRoot / L"Profile 1" / L"History";
     Check(CreateHistory(defaultHistory, 100000, true), "create isolated 100k history database");
     Check(CreateHistory(profileHistory, 1, true), "create second profile database");
+    std::wstring compatibleDetail;
+    Check(BrowserDiscovery::IsCompatibleUserDataRoot(tempRoot, compatibleDetail),
+        "synthetic Chromium User Data root passes discovery schema validation");
 
     BrowserDefinition testBrowser;
     testBrowser.id = L"test";
@@ -284,6 +327,22 @@ int wmain(int argc, wchar_t** argv) {
 
     SnapshotManager snapshots;
     ChromiumHistoryAdapter adapter(snapshots);
+    const auto discoveredQuark = std::find_if(systemDiscoveredConfig.browsers.begin(),
+        systemDiscoveredConfig.browsers.end(), [](const BrowserDefinition& browser) {
+            return std::any_of(browser.executableCandidates.begin(), browser.executableCandidates.end(),
+                [](const std::filesystem::path& path) { return path.filename() == L"quark.exe"; });
+        });
+    if (discoveredQuark != systemDiscoveredConfig.browsers.end()) {
+        const auto quarkProfiles = adapter.DiscoverProfiles(*discoveredQuark);
+        Check(!quarkProfiles.empty(), "system-discovered Quark profiles are readable by Chromium adapter");
+        if (!quarkProfiles.empty()) {
+            const auto quarkRecent = adapter.Search(*discoveredQuark, quarkProfiles.front(), L"", 5);
+            std::cout << "METRIC quark_recent_results=" << quarkRecent.results.size()
+                      << " quark_error=" << WideToUtf8(quarkRecent.error) << '\n';
+            Check(quarkRecent.error.empty(),
+                "system-discovered Quark history query completes without adapter error");
+        }
+    }
     const auto profiles = adapter.DiscoverProfiles(testBrowser);
     Check(profiles.size() == 2, "Local State discovers Default and Profile 1");
     auto filteredBrowser = testBrowser;
