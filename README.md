@@ -16,6 +16,8 @@
 
 Listary 集成依赖本工具进程保持运行；可将 EXE 快捷方式放入当前用户“启动”目录。仅使用 Listary 时不会创建原生 Edit/ListView，也不会加载输入法模块。
 
+开机启动、Listary 配置备份与恢复见 `docs\LISTARY_INTEGRATION.md`；Listary、uTools、Snipaste 的键盘工作流分工及后续扩展建议见 `docs\DESKTOP_KEYBOARD_WORKFLOW.md`。
+
 托盘菜单包含“显示”“设置”“退出”。“设置”会打开 INI；修改后需要重启程序。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
 
 ## 构建和测试
