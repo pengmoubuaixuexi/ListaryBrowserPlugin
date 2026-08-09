@@ -83,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\backup-listary-config.ps1
 - 建议映射只保存在内存中。工具重启后，需要重新在 Listary 输入查询再选择结果。
 - 监听套接字只绑定 IPv4 loopback `127.0.0.1`，不接受局域网或公网连接。
 - 普通 Listary“命令”模式和 `--query` 仍保留，作为原生窗口回退入口。
-- 当前保留 INI 中的 `Alt+Shift+Space` 作为回退入口；Listary 使用 `Ctrl+Shift+Space`，两者互不冲突。
+- Listary 保持默认的双击 `Ctrl` 呼出；本工具保留 INI 中的 `Ctrl+Shift+Space` 作为独立回退入口，两者互不冲突。
 
 更多外接能力的职责划分和候选扩展见 `docs\DESKTOP_KEYBOARD_WORKFLOW.md`。
 

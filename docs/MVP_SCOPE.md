@@ -7,7 +7,7 @@
 ## 本次必须交付
 
 - Windows 10/11 x64，原生 C++20 + Win32，Release 便携 EXE。
-- 单实例、默认 `Alt+Shift+Space` 全局快捷键、搜索窗口、托盘的显示/设置/退出菜单。
+- 单实例、可配置全局快捷键（当前为 `Ctrl+Shift+Space`）、搜索窗口、托盘的显示/设置/退出菜单。
 - 严格前缀路由：`g` 查询 Chrome，随后由同一个 Chromium 适配器支持 `e` 查询 Edge。
 - `prefix`、浏览器名称、启用状态、EXE 候选路径、User Data 候选路径和历史相对路径由 INI 配置驱动。
 - 自动发现 `Default` 与 `Profile N`；优先读取 `Local State` 的 `profile.info_cache`，失败时扫描目录。

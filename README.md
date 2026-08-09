@@ -1,6 +1,6 @@
 # Browser History Launcher
 
-一个 Windows 10/11 x64 原生浏览器历史启动器。程序常驻托盘，按 `Alt+Shift+Space` 呼出，输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，并始终使用结果来源浏览器和配置文件打开网址。
+一个 Windows 10/11 x64 原生浏览器历史启动器。程序常驻托盘，按 `Ctrl+Shift+Space` 呼出，输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，并始终使用结果来源浏览器和配置文件打开网址。
 
 当前实现严格限于 Chromium 浏览历史，不搜索文件、应用、书签、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。
 
@@ -8,7 +8,7 @@
 
 1. 使用 `build\Release\BrowserHistoryLauncher.exe`，并让 `BrowserHistoryLauncher.ini` 与 EXE 位于同一目录。
 2. 启动后程序隐藏在托盘中。
-3. 按 `Alt+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录。
+3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录。
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
@@ -48,7 +48,7 @@ Release 使用 C++20、静态 MSVC CRT 和 Windows SDK 自带 `winsqlite3.lib`�
 
 INI 的 `[app]` 支持：
 
-- `Hotkey`：修饰键加 Space、字母或数字，例如 `Alt+Shift+Space`。
+- `Hotkey`：修饰键加 Space、字母或数字，例如当前使用的 `Ctrl+Shift+Space`。
 - `Hotkey=none`：禁用本工具自己的全局快捷键，适合只通过 Listary 调用。
 - `MaxResults`：1–100，默认 20。
 - `DebounceMs`：限制为 60–120，默认 90。

@@ -2,8 +2,8 @@
 
 ## 当前分工
 
-- **Listary**：统一的键盘入口、文件/应用搜索、命令和下拉结果界面。当前呼出快捷键为 `Ctrl+Shift+Space`。
-- **BrowserHistoryLauncher**：只负责按需读取 Chrome/Edge 历史，把动态结果提供给 Listary，并用来源浏览器打开。本工具自身的 `Alt+Shift+Space` 保留为 Listary 不可用时的回退入口。
+- **Listary**：统一的键盘入口、文件/应用搜索、命令和下拉结果界面，保持默认的双击 `Ctrl` 呼出方式。
+- **BrowserHistoryLauncher**：只负责按需读取 Chrome/Edge 历史，把动态结果提供给 Listary，并用来源浏览器打开。本工具自身的 `Ctrl+Shift+Space` 保留为 Listary 不可用时的回退入口。
 - **uTools**：承载需要表单、交互界面、剪贴板处理或多步骤操作的插件。
 - **Snipaste**：截图、标注、贴图和临时视觉参考，不再叠加应用启动职责。
 
@@ -51,8 +51,8 @@
 
 ## 快捷键建议
 
-- Listary：`Ctrl+Shift+Space`
-- BrowserHistoryLauncher 回退入口：`Alt+Shift+Space`
+- Listary：双击 `Ctrl`
+- BrowserHistoryLauncher 回退入口：`Ctrl+Shift+Space`
 - Snipaste：保留当前截图键
 - uTools：使用另一个不冲突的组合键
 
