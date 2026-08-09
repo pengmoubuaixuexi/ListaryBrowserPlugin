@@ -6,7 +6,21 @@
 
 ## 首次注册
 
-保持 `BrowserHistoryLauncher.exe` 与 INI 在同一目录，执行：
+把完整 portable 目录解压到一个不会随意移动的位置，然后执行一次：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1
+```
+
+该脚本会注册当前用户的 `bhl://` 协议、创建开机启动快捷方式并启动程序；不需要管理员权限。接下来仍需按本文的 Chrome/Edge 两节在 Listary 中配置 `g/e` 网页搜索，因为脚本不会覆盖用户的整份 Listary 设置。
+
+需要取消注册和开机启动时执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1 -Remove
+```
+
+也可以只注册协议。保持 `BrowserHistoryLauncher.exe` 与 INI 在同一目录，执行：
 
 ```powershell
 .\BrowserHistoryLauncher.exe --register-listary-protocol
@@ -57,6 +71,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\configure-startup.ps1
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\configure-startup.ps1 -Remove
 ```
+
+在 portable 发布包中，同一个脚本会自动使用其上级目录里的 EXE。
+
+## 交付给其他人
+
+不要只发送单个 EXE。Listary 集成至少需要完整 portable 目录，其中包括：
+
+- `BrowserHistoryLauncher.exe`
+- `BrowserHistoryLauncher.ini`
+- `scripts\setup-current-user.ps1` 和 `scripts\configure-startup.ps1`
+- `docs\LISTARY_INTEGRATION.md`
+
+接收者解压后运行一次 `setup-current-user.ps1`，再按照本文配置 Listary 的 `g/e` 两项即可。两个 PowerShell 脚本只是安装/移除辅助工具，不是运行时依赖；配置完成后，程序日常运行仍只有原生 EXE。
 
 ## 配置备份与恢复
 

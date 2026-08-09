@@ -18,6 +18,8 @@ Listary 集成依赖本工具进程保持运行；可将 EXE 快捷方式放入�
 
 开机启动、Listary 配置备份与恢复见 `docs\LISTARY_INTEGRATION.md`；Listary、uTools、Snipaste 的键盘工作流分工及后续扩展建议见 `docs\DESKTOP_KEYBOARD_WORKFLOW.md`。
 
+交付给其他人时请发送完整的 `build\portable` 目录，而不是单独发送 EXE。接收者运行一次 `scripts\setup-current-user.ps1` 后，再按集成文档配置 Listary 的 `g/e` 网页搜索。
+
 托盘菜单包含“显示”“设置”“退出”。“设置”会打开 INI；修改后需要重启程序。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
 
 ## 构建和测试
