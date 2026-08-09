@@ -6,6 +6,7 @@
 #include "json_document.h"
 #include "listary_configurator.h"
 #include "query_parser.h"
+#include "search_fallback.h"
 #include "snapshot_manager.h"
 #include "text_util.h"
 
@@ -145,6 +146,16 @@ int wmain(int argc, wchar_t** argv) {
     Check(!parsed.empty && parsed.prefix == L"g" && parsed.query == L"github", "query parser is case-insensitive");
     Check(IsHttpUrl(L"HTTPS://example.com/a b"), "HTTP URL detection");
     Check(BrowserLauncher::QuoteArgument(L"a b\\\"c") == L"\"a b\\\\\\\"c\"", "CreateProcess argument quoting");
+    BrowserDefinition genericSearchBrowser;
+    genericSearchBrowser.id = L"q";
+    genericSearchBrowser.name = L"Quark";
+    const auto genericFallback = MakeSearchFallback(genericSearchBrowser, L"百度 a&b");
+    Check(genericFallback && genericFallback->url ==
+        L"https://www.bing.com/search?q=%E7%99%BE%E5%BA%A6%20a%26b" &&
+        genericFallback->title == L"使用 Quark 搜索“百度 a&b”",
+        "generic zero-history search fallback URL-encodes Unicode query");
+    Check(!MakeSearchFallback(genericSearchBrowser, L""),
+        "empty query does not create a web-search fallback");
 
     const std::filesystem::path ini = argc > 1 ? argv[1] : L"BrowserHistoryLauncher.ini";
     std::wstring warning;
@@ -234,13 +245,16 @@ int wmain(int argc, wchar_t** argv) {
         brave->enabled = true;
         brave->prefix = L"bb";
         brave->iconPath = noHotkeyIni;
+        brave->searchUrlTemplate = L"https://search.example.test/?q={query}";
         Check(ConfigStore::SaveBrowserSettings(editableIni, *brave, error),
             "browser settings persist to INI");
         const auto persisted = ConfigStore::Load(editableIni, warning);
         const auto saved = std::find_if(persisted.browsers.begin(), persisted.browsers.end(),
             [](const BrowserDefinition& browser) { return browser.id == L"brave"; });
         Check(saved != persisted.browsers.end() && saved->enabled && saved->prefix == L"bb" &&
-            saved->iconPath == noHotkeyIni, "browser enabled state, keyword, and icon round-trip");
+            saved->iconPath == noHotkeyIni &&
+            saved->searchUrlTemplate == L"https://search.example.test/?q={query}",
+            "browser enabled state, keyword, icon, and search URL round-trip");
     }
     wchar_t selfPathBuffer[32768]{};
     GetModuleFileNameW(nullptr, selfPathBuffer, 32768);

@@ -1,6 +1,7 @@
 #include "history_search_service.h"
 
 #include "query_parser.h"
+#include "search_fallback.h"
 
 #include <algorithm>
 #include <chrono>
@@ -76,6 +77,12 @@ SearchResponse HistorySearchService::Execute(const Request& request) {
         });
         if (response.results.size() > request.limit) response.results.resize(request.limit);
         if (response.results.empty() && response.error.empty() && !lastError.empty()) response.error = std::move(lastError);
+        if (response.results.empty()) {
+            if (auto fallback = MakeSearchFallback(request.browser, request.query)) {
+                response.results.push_back(std::move(*fallback));
+                response.error.clear();
+            }
+        }
     }
 
     response.elapsedMicroseconds = static_cast<std::uint64_t>(
