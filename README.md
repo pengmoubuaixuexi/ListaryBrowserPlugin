@@ -1,15 +1,40 @@
 # Browser History Launcher
 
+[![Latest release](https://img.shields.io/github/v/release/pengmoubuaixuexi/ListaryBrowserPlugin)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)
+[![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin)
+
 一个 Windows 10/11 x64 原生浏览器历史启动器。程序常驻托盘，按 `Ctrl+Shift+Space` 呼出，输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，并始终使用结果来源浏览器和配置文件打开网址。
 
 当前实现严格限于 Chromium 浏览历史，不搜索文件、应用、书签、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。
+
+> 这是社区开发的非官方 Listary 扩展，与 Listary 官方无隶属或背书关系。本机已验证 Listary 6.3.5.94，Listary V7 已由实际用户验证兼容。
+
+## 为什么做这个
+
+Listary 可以快速找到文件和应用，但浏览器内部访问过的页面通常还要切回浏览器搜索。本工具把 Chrome、Edge 及其他兼容 Chromium 浏览器的本地历史记录直接放进 Listary 下拉列表：输入关键字即可筛选，回车后仍由记录所属浏览器和 Profile 打开。
+
+- 原生 C++20 + Win32，Listary-only 空闲私有工作集实测约 2.24 MiB。
+- 历史记录只在本机按需读取，不上传网址和查询词，不建立后台完整索引。
+- 自动发现 Windows 已注册且历史库结构兼容的 Chromium 浏览器。
+- 可一次配置多个浏览器、关键字和 ICO 图标，只重启一次 Listary。
+- 没有历史匹配时，第一条结果直接交给对应浏览器地址栏处理网址或搜索词。
+
+## 快速开始
+
+1. 从项目 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)下载 `ListaryBrowserPlugin-Setup-x64.exe`。
+2. 完成当前用户安装；默认可选择开机启动，不需要管理员权限。
+3. 在自动打开的“配置 Listary”页面选择浏览器、启用状态、关键字和图标。
+4. 保存后呼出 Listary，例如输入 `g github`，直接在下拉列表选择历史页面。
+
+安装器未经 Authenticode 商业证书签名，Windows 可能显示“未知发布者”。请只从本项目的 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases)下载，并可用同一版本提供的 `SHA256SUMS.txt` 核对文件。
 
 ## 运行
 
 推荐使用图形安装器：
 
 ```text
-build\installer\ListaryBrowserPlugin-Setup-x64.exe
+ListaryBrowserPlugin-Setup-x64.exe
 ```
 
 安装向导只负责选择安装位置、开机自动启动和桌面快捷方式，采用当前用户安装，不需要管理员权限。安装完成后会打开主程序的“配置 Listary”页面；浏览器与关键字不是一次性的安装选项，以后新装浏览器时可随时重新配置。
@@ -95,3 +120,11 @@ INI 的 `[app]` 支持：
 ## 已冻结的首版边界
 
 详细边界见 `docs\MVP_SCOPE.md`。主程序只增加了 Listary/浏览器接入所需的窄配置页和用户明确要求的浏览器地址栏动作；仍不包含实时联网建议、通用设置中心、Firefox 适配器和需求文档明确排除的功能。
+
+## English
+
+Browser History Launcher is an unofficial, privacy-focused Listary extension for Windows 10/11 x64. It shows local Chrome, Edge, and compatible Chromium browser history directly in Listary's dropdown and always opens a selected item with its source browser and profile.
+
+The runtime is native C++20/Win32, does not upload browsing data, does not build a background full-history index, and uses about 2.24 MiB private working set in the measured Listary-only idle scenario. Listary 6.3.5.94 was verified locally, and a real user has confirmed compatibility with Listary V7.
+
+Download `ListaryBrowserPlugin-Setup-x64.exe` from [GitHub Releases](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest), install it without administrator privileges, then use **Configure Listary** to select detected browsers and keywords. This is a community project and is not affiliated with or endorsed by Listary.

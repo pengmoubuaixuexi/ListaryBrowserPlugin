@@ -40,6 +40,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "..\build\Release\BrowserHistoryLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\BrowserHistoryLauncher.ini"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\LISTARY_INTEGRATION.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\RESOURCE_REPORT.md"; DestDir: "{app}\docs"; Flags: ignoreversion
