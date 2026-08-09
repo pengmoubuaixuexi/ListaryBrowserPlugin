@@ -16,7 +16,6 @@ struct BrowserDefinition {
     std::filesystem::path iconPath;
     std::vector<std::filesystem::path> executableCandidates;
     std::vector<std::filesystem::path> userDataCandidates;
-    std::wstring searchUrlTemplate = L"https://www.bing.com/search?q={query}";
     std::filesystem::path historyRelativePath = L"History";
     std::wstring profileArgument = L"--profile-directory={profile}";
     std::vector<std::wstring> enabledProfiles;

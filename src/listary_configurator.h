@@ -16,7 +16,8 @@ struct ListaryConfigurationResult {
 class ListaryConfigurator {
 public:
     static std::filesystem::path DetectPreferences();
-    static bool IsListaryRunning();
+    static bool StopForUpdate(const std::filesystem::path& executable,
+        bool& wasRunning, std::wstring& error);
     static ListaryConfigurationResult Configure(const AppConfig& config,
         const std::filesystem::path& preferencesPath, const std::filesystem::path& statePath);
     static ListaryConfigurationResult ConfigureBrowser(const BrowserDefinition& browser,

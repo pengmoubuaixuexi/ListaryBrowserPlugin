@@ -136,10 +136,27 @@ std::wstring BhlIconPath(const JsonValue& root, std::wstring_view keyword) {
 
 int wmain(int argc, wchar_t** argv) {
     wchar_t captureBuffer[32768]{};
-    if (GetEnvironmentVariableW(L"BHL_TEST_CAPTURE", captureBuffer, 32768) > 0 && argc >= 3) {
+    if (GetEnvironmentVariableW(L"BHL_TEST_CAPTURE", captureBuffer, 32768) > 0 && argc >= 2) {
         std::ofstream capture(std::filesystem::path(captureBuffer), std::ios::binary);
-        capture << WideToUtf8(argv[1]) << '\n' << WideToUtf8(argv[2]) << '\n';
+        if (argc >= 3) capture << WideToUtf8(argv[1]) << '\n' << WideToUtf8(argv[2]) << '\n';
+        else capture << '\n' << WideToUtf8(argv[1]) << '\n';
         return capture ? 0 : 3;
+    }
+    if (argc >= 2 && _wcsicmp(argv[1], L"--bhl-test-hold") == 0) {
+        Sleep(30000);
+        return 0;
+    }
+    if (argc >= 2 && _wcsicmp(argv[1], L"--bhl-test-visible") == 0) {
+        HWND window = CreateWindowExW(0, L"STATIC", L"Listary test busy window",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, -32000, -32000, 100, 100,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!window) return 4;
+        MSG message{};
+        while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        return 0;
     }
 
     const auto parsed = ParseQuery(L"G  github");
@@ -150,10 +167,14 @@ int wmain(int argc, wchar_t** argv) {
     genericSearchBrowser.id = L"q";
     genericSearchBrowser.name = L"Quark";
     const auto genericFallback = MakeSearchFallback(genericSearchBrowser, L"百度 a&b");
-    Check(genericFallback && genericFallback->url ==
-        L"https://www.bing.com/search?q=%E7%99%BE%E5%BA%A6%20a%26b" &&
-        genericFallback->title == L"使用 Quark 搜索“百度 a&b”",
-        "generic zero-history search fallback URL-encodes Unicode query");
+    Check(genericFallback && genericFallback->url == L"? 百度 a&b" &&
+        genericFallback->title == L"在 Quark 地址栏搜索“百度 a&b”",
+        "generic zero-history fallback delegates text to browser omnibox search");
+    const auto addressFallback = MakeSearchFallback(genericSearchBrowser, L"baidu.com");
+    Check(LooksLikeBrowserAddress(L"baidu.com") && addressFallback &&
+        addressFallback->url == L"baidu.com" &&
+        addressFallback->title == L"使用 Quark 打开 baidu.com",
+        "bare domain is delegated to browser URL fixup without a search engine URL");
     Check(!MakeSearchFallback(genericSearchBrowser, L""),
         "empty query does not create a web-search fallback");
 
@@ -213,6 +234,47 @@ int wmain(int argc, wchar_t** argv) {
     std::error_code ignored;
     std::filesystem::remove_all(tempRoot, ignored);
     std::filesystem::create_directories(tempRoot);
+    wchar_t selfPathBuffer[32768]{};
+    GetModuleFileNameW(nullptr, selfPathBuffer, 32768);
+    const auto fakeListary = tempRoot / L"Listary.exe";
+    std::filesystem::copy_file(selfPathBuffer, fakeListary,
+        std::filesystem::copy_options::overwrite_existing, ignored);
+    std::wstring fakeCommand = BrowserLauncher::QuoteArgument(fakeListary.wstring()) + L" --bhl-test-hold";
+    STARTUPINFOW fakeStartup{sizeof(fakeStartup)};
+    PROCESS_INFORMATION fakeProcess{};
+    const bool fakeStarted = CreateProcessW(fakeListary.c_str(), fakeCommand.data(), nullptr, nullptr,
+        FALSE, CREATE_NO_WINDOW, nullptr, tempRoot.c_str(), &fakeStartup, &fakeProcess) != FALSE;
+    if (fakeStarted) CloseHandle(fakeProcess.hThread);
+    Sleep(100);
+    bool fakeWasRunning = false;
+    std::wstring stopError;
+    const bool fakeStopped = fakeStarted &&
+        ListaryConfigurator::StopForUpdate(fakeListary, fakeWasRunning, stopError);
+    Check(fakeStopped && fakeWasRunning &&
+        WaitForSingleObject(fakeProcess.hProcess, 3000) == WAIT_OBJECT_0,
+        "Listary update flow automatically stops an idle background process");
+    if (fakeStarted) {
+        if (!fakeStopped) TerminateProcess(fakeProcess.hProcess, 1);
+        CloseHandle(fakeProcess.hProcess);
+    }
+    std::wstring visibleCommand = BrowserLauncher::QuoteArgument(fakeListary.wstring()) + L" --bhl-test-visible";
+    PROCESS_INFORMATION visibleProcess{};
+    const bool visibleStarted = CreateProcessW(fakeListary.c_str(), visibleCommand.data(), nullptr, nullptr,
+        FALSE, CREATE_NO_WINDOW, nullptr, tempRoot.c_str(), &fakeStartup, &visibleProcess) != FALSE;
+    if (visibleStarted) CloseHandle(visibleProcess.hThread);
+    Sleep(200);
+    bool visibleWasRunning = false;
+    stopError.clear();
+    const bool visibleStopped = visibleStarted &&
+        ListaryConfigurator::StopForUpdate(fakeListary, visibleWasRunning, stopError);
+    Check(!visibleStopped && visibleWasRunning && !stopError.empty() &&
+        WaitForSingleObject(visibleProcess.hProcess, 0) == WAIT_TIMEOUT,
+        "visible Listary window is not force-closed and enters retry/cancel flow");
+    if (visibleStarted) {
+        TerminateProcess(visibleProcess.hProcess, 0);
+        WaitForSingleObject(visibleProcess.hProcess, 3000);
+        CloseHandle(visibleProcess.hProcess);
+    }
     if (chromeDiscovery != discovery.entries.end()) {
         const auto exportedIcon = tempRoot / L"chrome.ico";
         Check(BrowserIcon::ExportIco(chromeDiscovery->executable, exportedIcon, error),
@@ -245,20 +307,15 @@ int wmain(int argc, wchar_t** argv) {
         brave->enabled = true;
         brave->prefix = L"bb";
         brave->iconPath = noHotkeyIni;
-        brave->searchUrlTemplate = L"https://search.example.test/?q={query}";
         Check(ConfigStore::SaveBrowserSettings(editableIni, *brave, error),
             "browser settings persist to INI");
         const auto persisted = ConfigStore::Load(editableIni, warning);
         const auto saved = std::find_if(persisted.browsers.begin(), persisted.browsers.end(),
             [](const BrowserDefinition& browser) { return browser.id == L"brave"; });
         Check(saved != persisted.browsers.end() && saved->enabled && saved->prefix == L"bb" &&
-            saved->iconPath == noHotkeyIni &&
-            saved->searchUrlTemplate == L"https://search.example.test/?q={query}",
-            "browser enabled state, keyword, icon, and search URL round-trip");
+            saved->iconPath == noHotkeyIni,
+            "browser enabled state, keyword, and icon round-trip");
     }
-    wchar_t selfPathBuffer[32768]{};
-    GetModuleFileNameW(nullptr, selfPathBuffer, 32768);
-
     JsonValue jsonRoundTrip;
     std::wstring jsonError;
     Check(ParseJsonUtf8("{\"text\":\"\\u4e2d\\u6587\",\"array\":[true,false,null,-1.25e2]}",
@@ -368,6 +425,17 @@ int wmain(int argc, wchar_t** argv) {
     captured.close();
     Check(Utf8ToWide(capturedProfile) == L"--profile-directory=Profile 1" &&
           Utf8ToWide(capturedUrl) == specialUrl, "profile and special URL arguments round-trip safely");
+    std::filesystem::remove(capturePath, ignored);
+    const std::wstring omniboxSearch = L"? 百度";
+    Check(BrowserLauncher::OpenUrl(testBrowser, L"", omniboxSearch, launchError),
+        "CreateProcessW launches browser omnibox search argument");
+    for (int attempt = 0; attempt < 100 && !std::filesystem::exists(capturePath); ++attempt) Sleep(10);
+    std::ifstream capturedSearch(capturePath, std::ios::binary);
+    std::getline(capturedSearch, capturedProfile);
+    std::getline(capturedSearch, capturedUrl);
+    capturedSearch.close();
+    Check(capturedProfile.empty() && Utf8ToWide(capturedUrl) == omniboxSearch,
+        "Unicode omnibox search argument round-trips safely");
     SetEnvironmentVariableW(L"BHL_TEST_CAPTURE", nullptr);
     Sleep(200);
 

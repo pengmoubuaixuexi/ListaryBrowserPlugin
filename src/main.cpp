@@ -575,19 +575,17 @@ private:
             return;
         }
         bool restartListaryOnFailure = false;
-        while (ListaryConfigurator::IsListaryRunning()) {
-            restartListaryOnFailure = true;
-            const int action = MessageBoxW(window_,
-                L"Listary 正在运行。请从 Listary 托盘菜单完全退出，然后点击“重试”。\n\n"
-                L"本工具不会强制结束 Listary，以免损坏它正在保存的配置。",
-                L"配置 Listary", MB_RETRYCANCEL | MB_ICONINFORMATION);
-            if (action != IDRETRY) {
-                if (!ListaryConfigurator::IsListaryRunning()) {
-                    std::wstring ignored;
-                    StartListary(ignored);
-                }
-                return;
+        for (;;) {
+            bool wasRunning = false;
+            std::wstring stopError;
+            if (ListaryConfigurator::StopForUpdate(FindListaryExecutable(), wasRunning, stopError)) {
+                restartListaryOnFailure = restartListaryOnFailure || wasRunning;
+                break;
             }
+            restartListaryOnFailure = restartListaryOnFailure || wasRunning;
+            const int action = MessageBoxW(window_, stopError.c_str(), L"配置 Listary",
+                MB_RETRYCANCEL | MB_ICONINFORMATION);
+            if (action != IDRETRY) return;
         }
         const auto restartAfterFailure = [&]() {
             if (!restartListaryOnFailure) return;
@@ -710,12 +708,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const bool requestedSettings = HasArgument(L"--settings");
     if (HasArgument(L"--configure-listary") || HasArgument(L"--remove-listary-integration")) {
         const bool quiet = HasArgument(L"--quiet");
-        if (ListaryConfigurator::IsListaryRunning()) {
-            if (!quiet) {
-                MessageBoxW(nullptr, L"请先从托盘完全退出 Listary，然后重试。",
-                    L"Listary 浏览器插件", MB_OK | MB_ICONWARNING);
+        bool listaryWasRunning = false;
+        for (;;) {
+            bool runningThisAttempt = false;
+            std::wstring stopError;
+            if (ListaryConfigurator::StopForUpdate(FindListaryExecutable(), runningThisAttempt, stopError)) {
+                listaryWasRunning = listaryWasRunning || runningThisAttempt;
+                break;
             }
-            return 6;
+            listaryWasRunning = listaryWasRunning || runningThisAttempt;
+            if (quiet) return 6;
+            if (MessageBoxW(nullptr, stopError.c_str(), L"Listary 浏览器插件",
+                    MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY) return 6;
         }
         const auto directory = ExecutableDirectory();
         const auto preferences = ListaryConfigurator::DetectPreferences();
@@ -733,9 +737,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         } else {
             result = ListaryConfigurator::Remove(preferences, statePath);
         }
+        std::wstring restartError;
+        const bool shouldRestart = HasArgument(L"--configure-listary") || listaryWasRunning;
+        const bool restarted = !shouldRestart || StartListary(restartError);
+        if (!restarted && result.ok) result.message += L"\n\n" + restartError;
         if (!quiet) {
             MessageBoxW(nullptr, result.message.c_str(), L"Listary 浏览器插件",
-                MB_OK | (result.ok ? MB_ICONINFORMATION : MB_ICONERROR));
+                MB_OK | ((result.ok && restarted) ? MB_ICONINFORMATION : MB_ICONERROR));
         }
         return result.ok ? 0 : (preferences.empty() ? 5 : 7);
     }

@@ -78,7 +78,7 @@ begin
       Exec(ExpandConstant('{app}\BrowserHistoryLauncher.exe'), '--remove-listary-integration --quiet',
         ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
       if (ResultCode = 6) and not UninstallSilent then
-        Retry := MsgBox('请从系统托盘完全退出 Listary，然后点击“重试”。选择“取消”将保留 Listary 中的网页搜索项。',
+        Retry := MsgBox('Listary 当前可能正在显示搜索或设置窗口，无法安全地自动关闭。请完成当前操作后点击“重试”。选择“取消”将保留 Listary 中的网页搜索项。',
           mbConfirmation, MB_RETRYCANCEL) = IDRETRY;
     until not Retry;
   end;

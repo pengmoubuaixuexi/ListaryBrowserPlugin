@@ -47,7 +47,7 @@ SearchResponse HistorySearchService::Execute(const Request& request) {
     SearchResponse response;
     response.generation = request.generation;
 
-    if (IsHttpUrl(request.query)) {
+    if (IsHttpUrl(request.query) || LooksLikeBrowserAddress(request.query)) {
         HistoryResult direct;
         direct.title = L"使用 " + request.browser.name + L" 直接打开";
         direct.url = request.query;

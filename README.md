@@ -20,7 +20,7 @@ build\installer\ListaryBrowserPlugin-Setup-x64.exe
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
-主窗口右上角的“配置 Listary”会重新读取 Windows 已注册浏览器，并验证其本地历史库是否符合当前 Chromium 适配器。通过验证的浏览器会自动加入下拉框，不要求预先写入 INI；选择后可设置启用状态、Listary 关键字和 ICO 图标。每次只同步当前下拉框中的浏览器，以后可逐个加入或移除其他浏览器；首次使用新版单项配置会清理旧版误批量创建的项目。应用会更新 INI、当前用户 `bhl://` 协议和 Listary `Preferences.json`。写入前必须从托盘完全退出 Listary，程序会创建时间戳备份，完成后重新启动 Listary。
+主窗口右上角的“配置 Listary”会重新读取 Windows 已注册浏览器，并验证其本地历史库是否符合当前 Chromium 适配器。通过验证的浏览器会自动加入下拉框，不要求预先写入 INI；选择后可设置启用状态、Listary 关键字和 ICO 图标。每次只同步当前下拉框中的浏览器，以后可逐个加入或移除其他浏览器；首次使用新版单项配置会清理旧版误批量创建的项目。应用会自动关闭后台空闲的 Listary、更新 INI、当前用户 `bhl://` 协议和 `Preferences.json`，然后重启 Listary；检测到 Listary 正在显示搜索或设置窗口时才提示重试/取消。
 
 也可以把浏览器历史直接显示为 Listary 的网页搜索提示：本工具通过仅监听 loopback 的按需接口返回结果，并用当前用户的 `bhl://` 协议固定交回来源浏览器和 Profile 打开。完整设置值见 `docs\LISTARY_INTEGRATION.md`。普通 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"` 仍作为原生窗口回退方式保留。
 
@@ -51,8 +51,9 @@ Release 使用 C++20、静态 MSVC CRT 和 Windows SDK 自带 `winsqlite3.lib`�
 
 - `g` 或 `g `：Chrome 最近记录。
 - `e` 或 `e `：Edge 最近记录。
-- `g github`：先在 Chrome 标题和 URL 中进行不区分 ASCII 大小写的子串匹配；没有匹配时显示一条“使用 Chrome 搜索”。
-- `q 百度`：夸克历史没有匹配时显示“使用 Quark 搜索‘百度’”，回车后固定由夸克打开搜索 URL。
+- `g github`：先在 Chrome 标题和 URL 中进行不区分 ASCII 大小写的子串匹配；没有匹配时把 `github` 作为 Chrome 地址栏搜索交给 Chrome 默认搜索提供方。
+- `q baidu.com`：识别为地址并直接交给夸克打开，不先构造搜索引擎 URL。
+- `q 百度`：夸克历史没有匹配时，以 Chromium 的 `? <搜索词>` 命令行约定交给夸克自己的地址栏搜索逻辑。
 - `e https://example.com/a`：生成一条由 Edge 直接打开的结果。
 - 未知前缀：只显示提示，不执行其他搜索。
 
@@ -76,7 +77,6 @@ INI 的 `[app]` 支持：
 - `IconPath`：Listary 中显示的 `.ico` 图标路径；配置页会从检测到的浏览器 EXE 资源中导出真正的 ICO 到 `%LocalAppData%\BrowserHistoryLauncher\Icons`。
 - `ExecutableCandidates`：用 `|` 分隔的 EXE 候选路径，支持环境变量。
 - `UserDataCandidates`：用 `|` 分隔的 User Data 候选路径。
-- `SearchUrlTemplate`：零历史匹配时使用的搜索 URL，必须是 `http(s)` 地址并包含 `{query}`；未知浏览器默认使用 Bing，Chrome 默认使用 Google。
 - `HistoryRelativePath`：配置文件目录下的历史库相对路径，默认 `History`。
 - `ProfileArgument`：启动参数模板，`{profile}` 替换为来源配置文件目录名。
 - `EnabledProfiles`：`*` 表示所有发现的配置文件，也可用 `|` 指定，例如 `Default|Profile 1`。
@@ -89,7 +89,7 @@ INI 的 `[app]` 支持：
 - 优先直接以 SQLite 只读模式查询；数据库忙时创建会话级临时快照。
 - 快照以 64 KiB 缓冲流式复制，并在同一搜索会话复用；源文件大小或修改时间变化时刷新。
 - 隐藏窗口、正常退出和下次启动清理本程序自己的快照，不删除其他程序临时文件。
-- 不上传网址、历史或查询词，默认不记录完整查询和历史；零匹配搜索也只生成本地结果，用户回车打开后才由浏览器把查询发送给所配置的搜索引擎。
+- 不上传网址、历史或查询词，默认不记录完整查询和历史；零匹配搜索只把原始内容交给来源浏览器，实际地址修复或默认搜索由浏览器完成。
 - 打开结果使用 `CreateProcessW` 和明确的浏览器 EXE，不经过 `cmd.exe`、PowerShell、ShellExecute 或系统默认浏览器。
 
 ## 已冻结的首版边界

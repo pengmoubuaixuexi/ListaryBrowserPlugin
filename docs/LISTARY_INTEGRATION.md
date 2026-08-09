@@ -14,7 +14,7 @@
 
 主窗口右上角和托盘菜单都提供“配置 Listary”。页面每次打开都会根据 `BrowserHistoryLauncher.ini` 重新检测浏览器；内置定义包括 Chrome、Edge、Brave、Vivaldi 和 Chromium。选择浏览器后可以设置是否启用、Listary 关键字以及 `.ico`/`.exe` 图标位置。以后新安装浏览器不需要重装本工具。
 
-快速配置通过配置结构探测兼容 Listary 6/7，不按版本号强行写入。它只修改 `WebSearch.Items.Insertions/Updates` 兼容结构，同时更新当前用户 `bhl://` 注册表，修改前创建带时间戳的 `Preferences.json.bhl-backup-*`。如果 Listary 正在运行，主程序会要求先从托盘完全退出；如果结构未知或关键字被其他自定义项目占用，则停止自动写入。
+快速配置通过配置结构探测兼容 Listary 6/7，不按版本号强行写入。它只修改 `WebSearch.Items.Insertions/Updates` 兼容结构，同时更新当前用户 `bhl://` 注册表，修改前创建带时间戳的 `Preferences.json.bhl-backup-*`。主程序会自动关闭后台空闲的 Listary，写入后重启；如果 Listary 正在显示搜索或设置窗口，或进程无法关闭，才显示重试/取消。如果结构未知或关键字被其他自定义项目占用，则停止自动写入。
 
 选择 `g` 时，Listary 内置 Google 网页搜索可能占用相同关键字。快速配置会禁用该内置项，并记录是否由本工具完成；卸载时只在确认为本工具修改的情况下恢复。卸载不会删除配置备份。
 

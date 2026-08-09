@@ -6,6 +6,6 @@
 #include <string>
 #include <string_view>
 
-std::wstring EncodeSearchQuery(std::wstring_view query);
+bool LooksLikeBrowserAddress(std::wstring_view input);
 std::optional<HistoryResult> MakeSearchFallback(const BrowserDefinition& browser,
     std::wstring_view query);

@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace {
 constexpr wchar_t kGoogleWebSearchId[] = L"ecb51462-cb27-4b89-ae53-333b4550f489";
@@ -222,6 +223,62 @@ bool LocateWebSearch(JsonValue& root, JsonValue*& insertions, JsonValue*& update
     updates = items ? RequireArray(*items, L"Updates", error) : nullptr;
     return insertions && updates;
 }
+
+std::wstring NormalizedExecutable(const std::filesystem::path& path) {
+    std::error_code error;
+    auto normalized = std::filesystem::weakly_canonical(path, error);
+    if (error) normalized = path.lexically_normal();
+    return ToLowerInvariant(normalized.wstring());
+}
+
+std::vector<DWORD> MatchingProcesses(const std::filesystem::path& executable) {
+    std::vector<DWORD> processes;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return processes;
+    PROCESSENTRY32W entry{sizeof(entry)};
+    const auto expected = NormalizedExecutable(executable);
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, executable.filename().c_str()) != 0) continue;
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+            if (!process) continue;
+            std::wstring path(32768, L'\0');
+            DWORD length = static_cast<DWORD>(path.size());
+            const bool matched = QueryFullProcessImageNameW(process, 0, path.data(), &length) &&
+                NormalizedExecutable(std::filesystem::path(std::wstring(path.data(), length))) == expected;
+            CloseHandle(process);
+            if (matched) processes.push_back(entry.th32ProcessID);
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return processes;
+}
+
+struct WindowProcessContext {
+    const std::vector<DWORD>* processes = nullptr;
+    bool visible = false;
+    bool requestClose = false;
+};
+
+BOOL CALLBACK VisitListaryWindow(HWND window, LPARAM parameter) {
+    auto& context = *reinterpret_cast<WindowProcessContext*>(parameter);
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    if (std::find(context.processes->begin(), context.processes->end(), processId) ==
+        context.processes->end()) return TRUE;
+    if (IsWindowVisible(window)) context.visible = true;
+    if (context.requestClose) PostMessageW(window, WM_CLOSE, 0, 0);
+    return TRUE;
+}
+
+bool WaitForProcessExit(const std::filesystem::path& executable, DWORD milliseconds) {
+    const auto deadline = GetTickCount64() + milliseconds;
+    while (GetTickCount64() < deadline) {
+        if (MatchingProcesses(executable).empty()) return true;
+        Sleep(50);
+    }
+    return MatchingProcesses(executable).empty();
+}
 }
 
 std::filesystem::path ListaryConfigurator::DetectPreferences() {
@@ -235,21 +292,46 @@ std::filesystem::path ListaryConfigurator::DetectPreferences() {
     return {};
 }
 
-bool ListaryConfigurator::IsListaryRunning() {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return false;
-    PROCESSENTRY32W entry{sizeof(entry)};
-    bool found = false;
-    if (Process32FirstW(snapshot, &entry)) {
-        do {
-            if (CompareStringOrdinal(entry.szExeFile, -1, L"Listary.exe", -1, TRUE) == CSTR_EQUAL) {
-                found = true;
-                break;
-            }
-        } while (Process32NextW(snapshot, &entry));
+bool ListaryConfigurator::StopForUpdate(const std::filesystem::path& executable,
+    bool& wasRunning, std::wstring& error) {
+    wasRunning = false;
+    if (executable.empty()) return true;
+    auto processes = MatchingProcesses(executable);
+    if (processes.empty()) return true;
+    wasRunning = true;
+
+    WindowProcessContext inspect{&processes};
+    EnumWindows(VisitListaryWindow, reinterpret_cast<LPARAM>(&inspect));
+    if (inspect.visible) {
+        error = L"Listary 当前有可见窗口，可能正在使用。请完成当前操作后点击“重试”，或选择“取消”。";
+        return false;
     }
-    CloseHandle(snapshot);
-    return found;
+
+    WindowProcessContext close{&processes, false, true};
+    EnumWindows(VisitListaryWindow, reinterpret_cast<LPARAM>(&close));
+    if (WaitForProcessExit(executable, 1000)) return true;
+
+    processes = MatchingProcesses(executable);
+    for (const DWORD processId : processes) {
+        HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, processId);
+        if (!process) {
+            error = L"无法关闭 Listary：" + FormatWindowsError(GetLastError());
+            return false;
+        }
+        const bool terminated = TerminateProcess(process, 0) != FALSE;
+        const DWORD terminateError = terminated ? ERROR_SUCCESS : GetLastError();
+        if (terminated) WaitForSingleObject(process, 3000);
+        CloseHandle(process);
+        if (!terminated) {
+            error = L"无法关闭 Listary：" + FormatWindowsError(terminateError);
+            return false;
+        }
+    }
+    if (!WaitForProcessExit(executable, 1000)) {
+        error = L"Listary 尚未完全退出，请稍后重试。";
+        return false;
+    }
+    return true;
 }
 
 ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& config,

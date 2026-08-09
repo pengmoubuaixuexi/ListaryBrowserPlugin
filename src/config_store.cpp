@@ -101,7 +101,6 @@ AppConfig ConfigStore::Defaults() {
     chrome.id = L"chrome";
     chrome.name = L"Google Chrome";
     chrome.prefix = L"g";
-    chrome.searchUrlTemplate = L"https://www.google.com/search?q={query}";
     chrome.executableCandidates = {
         ExpandEnvironment(L"%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"),
         ExpandEnvironment(L"%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe"),
@@ -112,7 +111,6 @@ AppConfig ConfigStore::Defaults() {
     edge.id = L"edge";
     edge.name = L"Microsoft Edge";
     edge.prefix = L"e";
-    edge.searchUrlTemplate = L"https://www.bing.com/search?q={query}";
     edge.executableCandidates = {
         ExpandEnvironment(L"%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"),
         ExpandEnvironment(L"%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe")};
@@ -179,12 +177,6 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
     for (const auto& section : sections) {
         BrowserDefinition browser;
         browser.id = section.substr(std::wstring(L"browser.").size());
-        const auto catalog = Defaults();
-        const auto catalogBrowser = std::find_if(catalog.browsers.begin(), catalog.browsers.end(),
-            [&](const BrowserDefinition& item) { return item.id == browser.id; });
-        if (catalogBrowser != catalog.browsers.end()) {
-            browser.searchUrlTemplate = catalogBrowser->searchUrlTemplate;
-        }
         browser.name = ReadValue(iniPath, section, L"Name", browser.id.c_str());
         browser.prefix = ToLowerInvariant(ReadValue(iniPath, section, L"Prefix", L""));
         browser.engine = ToLowerInvariant(ReadValue(iniPath, section, L"Engine", L"chromium"));
@@ -192,8 +184,6 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
         browser.iconPath = ExpandEnvironment(ReadValue(iniPath, section, L"IconPath", L""));
         browser.executableCandidates = ReadPaths(iniPath, section, L"ExecutableCandidates");
         browser.userDataCandidates = ReadPaths(iniPath, section, L"UserDataCandidates");
-        browser.searchUrlTemplate = ReadValue(iniPath, section, L"SearchUrlTemplate",
-            browser.searchUrlTemplate.c_str());
         browser.historyRelativePath = ReadValue(iniPath, section, L"HistoryRelativePath", L"History");
         browser.profileArgument = ReadValue(iniPath, section, L"ProfileArgument", L"--profile-directory={profile}");
         browser.enabledProfiles = Split(ReadValue(iniPath, section, L"EnabledProfiles", L"*"), L'|');
@@ -227,7 +217,6 @@ bool ConfigStore::SaveBrowserSettings(const std::filesystem::path& iniPath,
         !write(L"Engine", browser.engine) || !write(L"Enabled", enabled) || !write(L"IconPath", icon) ||
         !write(L"ExecutableCandidates", JoinPaths(browser.executableCandidates)) ||
         !write(L"UserDataCandidates", JoinPaths(browser.userDataCandidates)) ||
-        !write(L"SearchUrlTemplate", browser.searchUrlTemplate) ||
         !write(L"HistoryRelativePath", browser.historyRelativePath.wstring()) ||
         !write(L"ProfileArgument", browser.profileArgument) ||
         !write(L"EnabledProfiles", JoinStrings(browser.enabledProfiles))) {
@@ -247,12 +236,6 @@ bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {
         }
         if (browser.prefix.find_first_of(L" \t\r\n") != std::wstring::npos) {
             error = L"浏览器前缀不能包含空白字符：" + browser.prefix;
-            return false;
-        }
-        if (browser.searchUrlTemplate.find(L"{query}") == std::wstring::npos ||
-            (!StartsWithInsensitive(browser.searchUrlTemplate, L"http://") &&
-             !StartsWithInsensitive(browser.searchUrlTemplate, L"https://"))) {
-            error = L"搜索 URL 模板必须是 http(s) 地址并包含 {query}：" + browser.name;
             return false;
         }
         if (browser.engine != L"chromium") {
