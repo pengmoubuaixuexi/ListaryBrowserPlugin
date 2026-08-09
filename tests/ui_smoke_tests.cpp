@@ -138,6 +138,33 @@ int wmain(int argc, wchar_t** argv) {
         if (!edit || !list) Sleep(10);
     }
     Check(edit != nullptr && list != nullptr, "native Edit and ListView controls exist");
+    HWND configButton = FindWindowExW(window, nullptr, L"Button", L"配置 Listary");
+    Check(configButton != nullptr, "main window exposes the Listary configuration button");
+    if (configButton) {
+        PostMessageW(configButton, BM_CLICK, 0, 0);
+        HWND settingsWindow = nullptr;
+        const auto settingsDeadline = GetTickCount64() + 5000;
+        while (GetTickCount64() < settingsDeadline && !settingsWindow) {
+            settingsWindow = FindWindowW(L"BrowserHistoryLauncher.ListarySettings", nullptr);
+            if (!settingsWindow) Sleep(10);
+        }
+        Check(settingsWindow != nullptr, "Listary configuration dialog opens from the main window");
+        if (settingsWindow) {
+            Check(GetClassLongPtrW(settingsWindow, GCLP_HICON) != 0,
+                "configuration dialog uses the embedded application icon");
+            HWND browserCombo = nullptr;
+            LRESULT browserCount = 0;
+            const auto browserDeadline = GetTickCount64() + 5000;
+            while (GetTickCount64() < browserDeadline && browserCount < 2) {
+                browserCombo = FindWindowExW(settingsWindow, nullptr, WC_COMBOBOXW, nullptr);
+                if (browserCombo) browserCount = SendMessageW(browserCombo, CB_GETCOUNT, 0, 0);
+                if (browserCount < 2) Sleep(10);
+            }
+            Check(browserCombo != nullptr && browserCount >= 2,
+                "browser dropdown automatically detects installed configured browsers");
+            SendMessageW(settingsWindow, WM_CLOSE, 0, 0);
+        }
+    }
     Check(GetClassLongPtrW(window, GCLP_HICON) != 0, "embedded application icon is assigned to the window");
     const auto initialQueryDeadline = GetTickCount64() + 5000;
     while (GetTickCount64() < initialQueryDeadline && ListView_GetItemCount(list) == 0) Sleep(10);

@@ -129,7 +129,10 @@ JsonValue MakeInsertion(const BrowserDefinition& browser) {
 
     JsonValue icon = JsonValue::ObjectValue();
     const auto executable = BrowserLauncher::FindExecutable(browser);
-    icon.Set(L"Path", JsonValue::String(executable.wstring()));
+    std::error_code iconError;
+    const auto iconPath = !browser.iconPath.empty() && std::filesystem::is_regular_file(browser.iconPath, iconError)
+        ? browser.iconPath : executable;
+    icon.Set(L"Path", JsonValue::String(iconPath.wstring()));
     icon.Set(L"TypeName", JsonValue::String(L"Path"));
 
     JsonValue item = JsonValue::ObjectValue();

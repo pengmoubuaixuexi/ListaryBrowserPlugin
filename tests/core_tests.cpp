@@ -111,6 +111,24 @@ std::size_t CountDisabledGoogleUpdates(const JsonValue& root) {
     }
     return count;
 }
+
+std::wstring BhlIconPath(const JsonValue& root, std::wstring_view keyword) {
+    const auto* webSearch = root.Find(L"WebSearch");
+    const auto* items = webSearch ? webSearch->Find(L"Items") : nullptr;
+    const auto* insertions = items ? items->Find(L"Insertions") : nullptr;
+    if (!insertions || insertions->type() != JsonValue::Type::Array) return {};
+    for (const auto& insertion : insertions->array()) {
+        const auto* item = insertion.Find(L"Item");
+        const auto* itemKeyword = item ? item->Find(L"Keyword") : nullptr;
+        const auto* icon = item ? item->Find(L"Icon") : nullptr;
+        const auto* path = icon ? icon->Find(L"Path") : nullptr;
+        if (itemKeyword && itemKeyword->type() == JsonValue::Type::String &&
+            itemKeyword->text() == keyword && path && path->type() == JsonValue::Type::String) {
+            return path->text();
+        }
+    }
+    return {};
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -152,6 +170,24 @@ int wmain(int argc, wchar_t** argv) {
     const auto noHotkeyConfig = ConfigStore::Load(noHotkeyIni, noHotkeyWarning);
     Check(noHotkeyConfig.hotkeyVirtualKey == 0 && noHotkeyConfig.hotkeyModifiers == 0,
         "Hotkey=none disables the native global hotkey");
+    const auto editableIni = tempRoot / L"editable.ini";
+    std::filesystem::copy_file(ini, editableIni, std::filesystem::copy_options::overwrite_existing, ignored);
+    auto editableConfig = ConfigStore::Load(editableIni, warning);
+    auto brave = std::find_if(editableConfig.browsers.begin(), editableConfig.browsers.end(),
+        [](const BrowserDefinition& browser) { return browser.id == L"brave"; });
+    Check(brave != editableConfig.browsers.end(), "config catalog contains Brave definition");
+    if (brave != editableConfig.browsers.end()) {
+        brave->enabled = true;
+        brave->prefix = L"bb";
+        brave->iconPath = noHotkeyIni;
+        Check(ConfigStore::SaveBrowserSettings(editableIni, *brave, error),
+            "browser settings persist to INI");
+        const auto persisted = ConfigStore::Load(editableIni, warning);
+        const auto saved = std::find_if(persisted.browsers.begin(), persisted.browsers.end(),
+            [](const BrowserDefinition& browser) { return browser.id == L"brave"; });
+        Check(saved != persisted.browsers.end() && saved->enabled && saved->prefix == L"bb" &&
+            saved->iconPath == noHotkeyIni, "browser enabled state, keyword, and icon round-trip");
+    }
     wchar_t selfPathBuffer[32768]{};
     GetModuleFileNameW(nullptr, selfPathBuffer, 32768);
 
@@ -181,6 +217,7 @@ int wmain(int argc, wchar_t** argv) {
     listaryChrome.prefix = L"g";
     listaryChrome.executableCandidates = {selfPathBuffer};
     listaryChrome.userDataCandidates = {tempRoot};
+    listaryChrome.iconPath = noHotkeyIni;
     BrowserDefinition listaryEdge = listaryChrome;
     listaryEdge.id = L"edge";
     listaryEdge.name = L"Microsoft Edge";
@@ -193,6 +230,8 @@ int wmain(int argc, wchar_t** argv) {
     Check(ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
         CountBhlInsertions(configuredDocument) == 2 && CountDisabledGoogleUpdates(configuredDocument) == 1,
         "Listary configuration adds browser entries and resolves built-in g conflict");
+    Check(BhlIconPath(configuredDocument, L"g") == noHotkeyIni.wstring(),
+        "Listary insertion uses the configured icon path");
     const auto configuredAgain = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
     Check(configuredAgain.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
         CountBhlInsertions(configuredDocument) == 2,

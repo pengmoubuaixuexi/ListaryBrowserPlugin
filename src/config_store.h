@@ -9,5 +9,7 @@ class ConfigStore {
 public:
     static AppConfig Load(const std::filesystem::path& iniPath, std::wstring& warning);
     static bool Validate(const AppConfig& config, std::wstring& error);
+    static bool SaveBrowserSettings(const std::filesystem::path& iniPath,
+        const BrowserDefinition& browser, std::wstring& error);
     static AppConfig Defaults();
 };

@@ -34,6 +34,24 @@ std::vector<std::filesystem::path> ReadPaths(const std::filesystem::path& path,
     return result;
 }
 
+std::wstring JoinPaths(const std::vector<std::filesystem::path>& paths) {
+    std::wstring result;
+    for (const auto& path : paths) {
+        if (!result.empty()) result.push_back(L'|');
+        result += path.wstring();
+    }
+    return result;
+}
+
+std::wstring JoinStrings(const std::vector<std::wstring>& values) {
+    std::wstring result;
+    for (const auto& value : values) {
+        if (!result.empty()) result.push_back(L'|');
+        result += value;
+    }
+    return result;
+}
+
 void ParseHotkey(std::wstring_view text, AppConfig& config, std::wstring& warning) {
     const auto normalizedText = ToLowerInvariant(Trim(text));
     if (normalizedText == L"none" || normalizedText == L"off" || normalizedText == L"disabled") {
@@ -85,6 +103,7 @@ AppConfig ConfigStore::Defaults() {
     chrome.prefix = L"g";
     chrome.executableCandidates = {
         ExpandEnvironment(L"%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"),
+        ExpandEnvironment(L"%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe"),
         ExpandEnvironment(L"%LocalAppData%\\Google\\Chrome\\Application\\chrome.exe")};
     chrome.userDataCandidates = {ExpandEnvironment(L"%LocalAppData%\\Google\\Chrome\\User Data")};
 
@@ -96,7 +115,42 @@ AppConfig ConfigStore::Defaults() {
         ExpandEnvironment(L"%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"),
         ExpandEnvironment(L"%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe")};
     edge.userDataCandidates = {ExpandEnvironment(L"%LocalAppData%\\Microsoft\\Edge\\User Data")};
-    config.browsers = {std::move(chrome), std::move(edge)};
+
+    BrowserDefinition brave;
+    brave.id = L"brave";
+    brave.name = L"Brave";
+    brave.prefix = L"br";
+    brave.enabled = false;
+    brave.executableCandidates = {
+        ExpandEnvironment(L"%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+        ExpandEnvironment(L"%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+        ExpandEnvironment(L"%LocalAppData%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe")};
+    brave.userDataCandidates = {ExpandEnvironment(L"%LocalAppData%\\BraveSoftware\\Brave-Browser\\User Data")};
+
+    BrowserDefinition vivaldi;
+    vivaldi.id = L"vivaldi";
+    vivaldi.name = L"Vivaldi";
+    vivaldi.prefix = L"v";
+    vivaldi.enabled = false;
+    vivaldi.executableCandidates = {
+        ExpandEnvironment(L"%LocalAppData%\\Vivaldi\\Application\\vivaldi.exe"),
+        ExpandEnvironment(L"%ProgramFiles%\\Vivaldi\\Application\\vivaldi.exe"),
+        ExpandEnvironment(L"%ProgramFiles(x86)%\\Vivaldi\\Application\\vivaldi.exe")};
+    vivaldi.userDataCandidates = {ExpandEnvironment(L"%LocalAppData%\\Vivaldi\\User Data")};
+
+    BrowserDefinition chromium;
+    chromium.id = L"chromium";
+    chromium.name = L"Chromium";
+    chromium.prefix = L"c";
+    chromium.enabled = false;
+    chromium.executableCandidates = {
+        ExpandEnvironment(L"%LocalAppData%\\Chromium\\Application\\chrome.exe"),
+        ExpandEnvironment(L"%ProgramFiles%\\Chromium\\Application\\chrome.exe"),
+        ExpandEnvironment(L"%ProgramFiles(x86)%\\Chromium\\Application\\chrome.exe")};
+    chromium.userDataCandidates = {ExpandEnvironment(L"%LocalAppData%\\Chromium\\User Data")};
+
+    config.browsers = {std::move(chrome), std::move(edge), std::move(brave),
+        std::move(vivaldi), std::move(chromium)};
     return config;
 }
 
@@ -127,6 +181,7 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
         browser.prefix = ToLowerInvariant(ReadValue(iniPath, section, L"Prefix", L""));
         browser.engine = ToLowerInvariant(ReadValue(iniPath, section, L"Engine", L"chromium"));
         browser.enabled = ReadBool(iniPath, section, L"Enabled", true);
+        browser.iconPath = ExpandEnvironment(ReadValue(iniPath, section, L"IconPath", L""));
         browser.executableCandidates = ReadPaths(iniPath, section, L"ExecutableCandidates");
         browser.userDataCandidates = ReadPaths(iniPath, section, L"UserDataCandidates");
         browser.historyRelativePath = ReadValue(iniPath, section, L"HistoryRelativePath", L"History");
@@ -134,7 +189,41 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
         browser.enabledProfiles = Split(ReadValue(iniPath, section, L"EnabledProfiles", L"*"), L'|');
         config.browsers.push_back(std::move(browser));
     }
+    for (auto catalogBrowser : Defaults().browsers) {
+        const bool present = std::any_of(config.browsers.begin(), config.browsers.end(),
+            [&](const BrowserDefinition& browser) { return browser.id == catalogBrowser.id; });
+        if (!present) {
+            catalogBrowser.enabled = false;
+            config.browsers.push_back(std::move(catalogBrowser));
+        }
+    }
     return config;
+}
+
+bool ConfigStore::SaveBrowserSettings(const std::filesystem::path& iniPath,
+    const BrowserDefinition& browser, std::wstring& error) {
+    if (browser.id.empty() || browser.id.find_first_not_of(
+            L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::wstring::npos) {
+        error = L"浏览器 ID 无效。";
+        return false;
+    }
+    const std::wstring section = L"browser." + browser.id;
+    const std::wstring enabled = browser.enabled ? L"true" : L"false";
+    const std::wstring icon = browser.iconPath.wstring();
+    const auto write = [&](const wchar_t* key, const std::wstring& value) {
+        return WritePrivateProfileStringW(section.c_str(), key, value.c_str(), iniPath.c_str()) != FALSE;
+    };
+    if (!write(L"Name", browser.name) || !write(L"Prefix", browser.prefix) ||
+        !write(L"Engine", browser.engine) || !write(L"Enabled", enabled) || !write(L"IconPath", icon) ||
+        !write(L"ExecutableCandidates", JoinPaths(browser.executableCandidates)) ||
+        !write(L"UserDataCandidates", JoinPaths(browser.userDataCandidates)) ||
+        !write(L"HistoryRelativePath", browser.historyRelativePath.wstring()) ||
+        !write(L"ProfileArgument", browser.profileArgument) ||
+        !write(L"EnabledProfiles", JoinStrings(browser.enabledProfiles))) {
+        error = L"无法写入配置文件：" + iniPath.wstring() + L"。";
+        return false;
+    }
+    return true;
 }
 
 bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {

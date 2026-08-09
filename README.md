@@ -12,13 +12,15 @@
 build\installer\ListaryBrowserPlugin-Setup-x64.exe
 ```
 
-安装向导可以选择安装位置、启用的浏览器及其 Listary 关键字，并可选择快速配置 Listary、开机自动启动和桌面快捷方式。安装器采用当前用户安装，不需要管理员权限。快速配置会先备份 Listary 的 `Preferences.json`；检测到未知配置结构或关键字冲突时不会写入，并提示改用手动配置。
+安装向导只负责选择安装位置、开机自动启动和桌面快捷方式，采用当前用户安装，不需要管理员权限。安装完成后会打开主程序的“配置 Listary”页面；浏览器与关键字不是一次性的安装选项，以后新装浏览器时可随时重新配置。
 
 1. 使用 `build\Release\BrowserHistoryLauncher.exe`，并让 `BrowserHistoryLauncher.ini` 与 EXE 位于同一目录。
 2. 启动后程序隐藏在托盘中。
 3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录。
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
+
+主窗口右上角的“配置 Listary”会重新检测 INI 中定义且已经安装的浏览器。选择浏览器后可设置启用状态、Listary 关键字和图标文件位置；应用会更新 INI、当前用户 `bhl://` 协议和 Listary `Preferences.json`。写入前必须从托盘完全退出 Listary，程序会创建时间戳备份，完成后重新启动 Listary。
 
 也可以把浏览器历史直接显示为 Listary 的网页搜索提示：本工具通过仅监听 loopback 的按需接口返回结果，并用当前用户的 `bhl://` 协议固定交回来源浏览器和 Profile 打开。完整设置值见 `docs\LISTARY_INTEGRATION.md`。普通 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"` 仍作为原生窗口回退方式保留。
 
@@ -28,7 +30,7 @@ Listary 集成依赖本工具进程保持运行；可将 EXE 快捷方式放入�
 
 交付给其他人时优先发送安装器。`build\portable` 目录仍作为免安装版本保留，不能只发送单个 EXE。
 
-托盘菜单包含“显示”“设置”“退出”。“设置”会打开 INI；修改后需要重启程序。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
+托盘菜单包含“显示”“配置 Listary”“退出”。再次运行 EXE 会唤醒已有实例，不会启动第二个常驻实例。
 
 ## 构建和测试
 
@@ -70,13 +72,14 @@ INI 的 `[app]` 支持：
 - `Prefix`：唯一查询前缀。
 - `Engine`：首版只能为 `chromium`。
 - `Enabled`：`true`/`false`。
+- `IconPath`：Listary 中显示的 `.ico` 或 `.exe` 图标路径；为空时使用检测到的浏览器 EXE。
 - `ExecutableCandidates`：用 `|` 分隔的 EXE 候选路径，支持环境变量。
 - `UserDataCandidates`：用 `|` 分隔的 User Data 候选路径。
 - `HistoryRelativePath`：配置文件目录下的历史库相对路径，默认 `History`。
 - `ProfileArgument`：启动参数模板，`{profile}` 替换为来源配置文件目录名。
 - `EnabledProfiles`：`*` 表示所有发现的配置文件，也可用 `|` 指定，例如 `Default|Profile 1`。
 
-增加采用标准目录结构的 Chromium 浏览器只需增加一个 `browser.*` 节并分配唯一前缀，不需要修改 UI、路由器或 SQLite 查询代码。前缀冲突或不支持的引擎会拒绝启动并显示错误。
+默认目录已声明 Chrome、Edge、Brave、Vivaldi 和 Chromium；配置页只列出已安装项目，以及当前已启用但暂时找不到 EXE、可用于停用的项目。增加其他采用标准目录结构的 Chromium 浏览器只需增加一个 `browser.*` 节并分配唯一前缀，不需要修改 UI、路由器或 SQLite 查询代码。前缀冲突或不支持的引擎会拒绝应用并显示错误。
 
 ## 数据读取和隐私
 
@@ -89,4 +92,4 @@ INI 的 `[app]` 支持：
 
 ## 已冻结的首版边界
 
-详细边界见 `docs\MVP_SCOPE.md`。首版不包含网页搜索兜底、图形化设置页、Firefox 适配器和需求文档明确排除的功能。
+详细边界见 `docs\MVP_SCOPE.md`。主程序只增加了 Listary/浏览器接入所需的窄配置页；首版仍不包含网页搜索兜底、通用设置中心、Firefox 适配器和需求文档明确排除的功能。

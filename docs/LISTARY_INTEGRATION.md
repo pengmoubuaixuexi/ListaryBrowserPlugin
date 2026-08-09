@@ -9,13 +9,12 @@
 运行 `ListaryBrowserPlugin-Setup-x64.exe` 后，安装向导会提供：
 
 - 自定义安装位置；
-- Chrome/Edge 启用选择；
-- 每个浏览器的 Listary 关键字；
-- 可选的 Listary 快速配置；
 - 开机自动启动和桌面快捷方式；
-- 安装完成后立即启动。
+- 安装完成后立即启动主程序的“配置 Listary”页面。
 
-快速配置通过配置结构探测兼容 Listary 6/7，不按版本号强行写入。它只修改 `WebSearch.Items.Insertions/Updates` 兼容结构，修改前创建带时间戳的 `Preferences.json.bhl-backup-*`。如果 Listary 正在运行，安装器会要求先从托盘完全退出；如果结构未知或关键字被其他自定义项目占用，则停止自动写入并保留手动配置方式。
+主窗口右上角和托盘菜单都提供“配置 Listary”。页面每次打开都会根据 `BrowserHistoryLauncher.ini` 重新检测浏览器；内置定义包括 Chrome、Edge、Brave、Vivaldi 和 Chromium。选择浏览器后可以设置是否启用、Listary 关键字以及 `.ico`/`.exe` 图标位置。以后新安装浏览器不需要重装本工具。
+
+快速配置通过配置结构探测兼容 Listary 6/7，不按版本号强行写入。它只修改 `WebSearch.Items.Insertions/Updates` 兼容结构，同时更新当前用户 `bhl://` 注册表，修改前创建带时间戳的 `Preferences.json.bhl-backup-*`。如果 Listary 正在运行，主程序会要求先从托盘完全退出；如果结构未知或关键字被其他自定义项目占用，则停止自动写入。
 
 选择 `g` 时，Listary 内置 Google 网页搜索可能占用相同关键字。快速配置会禁用该内置项，并记录是否由本工具完成；卸载时只在确认为本工具修改的情况下恢复。卸载不会删除配置备份。
 
@@ -27,7 +26,7 @@
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1
 ```
 
-该脚本会注册当前用户的 `bhl://` 协议、创建开机启动快捷方式并启动程序；不需要管理员权限。接下来仍需按本文的 Chrome/Edge 两节在 Listary 中配置 `g/e` 网页搜索，因为脚本不会覆盖用户的整份 Listary 设置。
+该脚本会注册当前用户的 `bhl://` 协议、创建开机启动快捷方式并启动程序；不需要管理员权限。随后可从主窗口右上角完成 Listary 配置；下方 Chrome/Edge 两节保留为手动回退参考。
 
 需要取消注册和开机启动时执行：
 
@@ -98,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\configure-startup.ps1 -Remove
 - `scripts\setup-current-user.ps1` 和 `scripts\configure-startup.ps1`
 - `docs\LISTARY_INTEGRATION.md`
 
-接收者解压后运行一次 `setup-current-user.ps1`，再按照本文配置 Listary 的 `g/e` 两项即可。两个 PowerShell 脚本只是安装/移除辅助工具，不是运行时依赖；配置完成后，程序日常运行仍只有原生 EXE。
+接收者解压后运行一次 `setup-current-user.ps1`，再从主程序右上角配置浏览器即可。两个 PowerShell 脚本只是安装/移除辅助工具，不是运行时依赖；配置完成后，程序日常运行仍只有原生 EXE。
 
 ## 配置备份与恢复
 

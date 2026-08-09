@@ -13,6 +13,7 @@ struct BrowserDefinition {
     std::wstring prefix;
     std::wstring engine = L"chromium";
     bool enabled = true;
+    std::filesystem::path iconPath;
     std::vector<std::filesystem::path> executableCandidates;
     std::vector<std::filesystem::path> userDataCandidates;
     std::filesystem::path historyRelativePath = L"History";

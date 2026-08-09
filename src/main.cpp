@@ -4,10 +4,12 @@
 #include "config_store.h"
 #include "history_search_service.h"
 #include "listary_configurator.h"
+#include "listary_settings_dialog.h"
 #include "listary_suggestion_server.h"
 #include "query_parser.h"
 #include "resource.h"
 #include "snapshot_manager.h"
+#include "text_util.h"
 
 #include <Windows.h>
 #include <CommCtrl.h>
@@ -31,15 +33,50 @@ constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kShowMessage = WM_APP + 11;
 constexpr UINT kResultsMessage = WM_APP + 12;
 constexpr UINT kExitMessage = WM_APP + 13;
+constexpr UINT kSettingsMessage = WM_APP + 14;
 constexpr ULONG_PTR kQueryCopyData = 0x42484C51;
 constexpr ULONG_PTR kListaryOpenCopyData = 0x42484C4F;
 constexpr wchar_t kProtocolKey[] = L"Software\\Classes\\bhl";
 constexpr int kEditId = 100;
 constexpr int kListId = 101;
 constexpr int kStatusId = 102;
+constexpr int kConfigButtonId = 103;
 constexpr int kMenuShow = 200;
 constexpr int kMenuSettings = 201;
 constexpr int kMenuExit = 202;
+
+std::filesystem::path FindListaryExecutable() {
+    const std::vector<std::filesystem::path> candidates = {
+        ExpandEnvironment(L"%ProgramFiles%\\Listary\\Listary.exe"),
+        ExpandEnvironment(L"%ProgramFiles(x86)%\\Listary\\Listary.exe"),
+        ExpandEnvironment(L"%LocalAppData%\\Programs\\Listary\\Listary.exe")};
+    for (const auto& candidate : candidates) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(candidate, error)) return candidate;
+    }
+    return {};
+}
+
+bool StartListary(std::wstring& error) {
+    const auto executable = FindListaryExecutable();
+    if (executable.empty()) {
+        error = L"配置已保存，但没有找到 Listary.exe，请手动启动 Listary。";
+        return false;
+    }
+    std::wstring command = BrowserLauncher::QuoteArgument(executable.wstring()) + L" --startup";
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE, 0,
+            nullptr, executable.parent_path().c_str(), &startup, &process)) {
+        error = L"配置已保存，但无法重新启动 Listary：" + FormatWindowsError(GetLastError());
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
 
 std::filesystem::path ExecutableDirectory() {
     std::wstring buffer(32768, L'\0');
@@ -114,7 +151,7 @@ public:
               if (!window_ || !PostMessageW(window_, kResultsMessage, 0, reinterpret_cast<LPARAM>(payload))) {
                   delete payload;
               }
-          }), listaryServer_(config_) {}
+          }), listaryServer_(std::make_unique<ListarySuggestionServer>(config_)) {}
 
     ~App() {
         RemoveTrayIcon();
@@ -148,7 +185,7 @@ public:
         }
         AddTrayIcon();
         std::wstring listaryError;
-        if (!listaryServer_.Start(listaryError)) {
+        if (!listaryServer_->Start(listaryError)) {
             MessageBoxW(window_, listaryError.c_str(), L"Listary 建议服务未启动", MB_OK | MB_ICONWARNING);
         }
         if (showImmediately) Show();
@@ -171,9 +208,14 @@ public:
         BeginSearch();
     }
 
+    void ShowSettings() {
+        Show();
+        ShowListarySettings();
+    }
+
     void OpenListaryUri(std::wstring_view uri) {
         std::wstring error;
-        const auto item = listaryServer_.ResolveUri(uri, error);
+        const auto item = listaryServer_->ResolveUri(uri, error);
         if (!item) {
             MessageBoxW(window_, error.c_str(), L"无法打开 Listary 历史结果", MB_OK | MB_ICONWARNING);
             return;
@@ -230,6 +272,7 @@ private:
         case kTrayMessage: OnTrayMessage(lParam); return 0;
         case kShowMessage: Show(); return 0;
         case kExitMessage: DestroyWindow(window_); return 0;
+        case kSettingsMessage: Show(); ShowListarySettings(); return 0;
         case kResultsMessage: ApplyResults(reinterpret_cast<SearchResponse*>(lParam)); return 0;
         case WM_DESTROY:
             if (config_.hotkeyVirtualKey != 0) UnregisterHotKey(window_, kHotkeyId);
@@ -256,20 +299,25 @@ private:
     }
 
     bool CreateSearchControls() {
-        if (edit_ && status_ && list_) return true;
+        if (edit_ && status_ && list_ && configButton_) return true;
         edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
             0, 0, 0, 0, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEditId)), instance_, nullptr);
-        status_ = CreateWindowExW(0, L"STATIC", L"输入 g 或 e，加空格与关键词",
+        configButton_ = CreateWindowExW(0, L"BUTTON", L"配置 Listary",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, window_,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kConfigButtonId)), instance_, nullptr);
+        status_ = CreateWindowExW(0, L"STATIC", L"",
             WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 0, 0, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatusId)), instance_, nullptr);
         list_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
             WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
             0, 0, 0, 0, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kListId)), instance_, nullptr);
-        if (!edit_ || !status_ || !list_) return false;
+        if (!edit_ || !configButton_ || !status_ || !list_) return false;
         SendMessageW(edit_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
         SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(smallFont_), TRUE);
+        SendMessageW(configButton_, WM_SETFONT, reinterpret_cast<WPARAM>(smallFont_), TRUE);
         SendMessageW(list_, WM_SETFONT, reinterpret_cast<WPARAM>(smallFont_), TRUE);
         SetWindowSubclass(edit_, EditSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
         ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        SetWindowTextW(status_, InputHint().c_str());
 
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
@@ -297,7 +345,11 @@ private:
         constexpr int margin = 12;
         constexpr int editHeight = 38;
         constexpr int statusHeight = 24;
-        MoveWindow(edit_, margin, margin, std::max(0, width - margin * 2), editHeight, TRUE);
+        constexpr int configWidth = 126;
+        constexpr int gap = 8;
+        MoveWindow(edit_, margin, margin, std::max(0, width - margin * 2 - configWidth - gap), editHeight, TRUE);
+        MoveWindow(configButton_, std::max(margin, width - margin - configWidth), margin,
+            configWidth, editHeight, TRUE);
         MoveWindow(status_, margin, margin + editHeight + 7, std::max(0, width - margin * 2), statusHeight, TRUE);
         MoveWindow(list_, margin, margin + editHeight + statusHeight + 9,
             std::max(0, width - margin * 2), std::max(0, height - editHeight - statusHeight - margin * 2 - 9), TRUE);
@@ -307,6 +359,10 @@ private:
         if (id == kEditId && notification == EN_CHANGE && IsWindowVisible(window_)) {
             KillTimer(window_, kDebounceTimer);
             SetTimer(window_, kDebounceTimer, config_.debounceMs, nullptr);
+            return 0;
+        }
+        if (id == kConfigButtonId && notification == BN_CLICKED) {
+            ShowListarySettings();
             return 0;
         }
         if (id == kMenuShow) Show();
@@ -354,7 +410,7 @@ private:
         results_.shrink_to_fit();
         ListView_DeleteAllItems(list_);
         SetWindowTextW(edit_, L"");
-        SetWindowTextW(status_, L"输入 g 或 e，加空格与关键词");
+        SetWindowTextW(status_, InputHint().c_str());
     }
 
     void BeginSearch() {
@@ -365,7 +421,7 @@ private:
             searchService_.CancelAndCleanup(generation_);
             results_.clear();
             ListView_DeleteAllItems(list_);
-            SetWindowTextW(status_, L"输入 g 或 e，加空格与关键词");
+            SetWindowTextW(status_, InputHint().c_str());
             return;
         }
         const auto* browser = registry_.FindByPrefix(parsed.prefix);
@@ -466,7 +522,7 @@ private:
         GetCursorPos(&cursor);
         HMENU menu = CreatePopupMenu();
         AppendMenuW(menu, MF_STRING, kMenuShow, L"显示");
-        AppendMenuW(menu, MF_STRING, kMenuSettings, L"设置");
+        AppendMenuW(menu, MF_STRING, kMenuSettings, L"配置 Listary");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kMenuExit, L"退出");
         SetForegroundWindow(window_);
@@ -474,17 +530,122 @@ private:
         DestroyMenu(menu);
     }
 
-    void OpenSettings() {
-        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", configPath_.c_str(),
-            nullptr, configPath_.parent_path().c_str(), SW_SHOWNORMAL));
-        if (result <= 32) {
-            MessageBoxW(window_, L"无法打开配置文件。", L"浏览器历史启动器", MB_OK | MB_ICONERROR);
+    std::wstring InputHint() const {
+        std::wstring prefixes;
+        for (const auto& browser : config_.browsers) {
+            if (!browser.enabled) continue;
+            if (!prefixes.empty()) prefixes += L"、";
+            prefixes += browser.prefix;
         }
+        return prefixes.empty() ? L"尚未启用浏览器，请点击右上角配置 Listary" :
+            L"输入 " + prefixes + L"，加空格与关键词";
+    }
+
+    void OpenSettings() {
+        Show();
+        ShowListarySettings();
+    }
+
+    void ShowListarySettings() {
+        const auto selection = ListarySettingsDialog::Show(instance_, window_, config_);
+        if (!selection) return;
+
+        AppConfig candidate = config_;
+        auto browser = std::find_if(candidate.browsers.begin(), candidate.browsers.end(),
+            [&](const BrowserDefinition& item) { return item.id == selection->id; });
+        if (browser == candidate.browsers.end()) {
+            MessageBoxW(window_, L"浏览器定义已经失效，请重新打开配置页。",
+                L"配置 Listary", MB_OK | MB_ICONERROR);
+            return;
+        }
+        const BrowserDefinition originalBrowser = *browser;
+        *browser = *selection;
+        std::wstring error;
+        if (!ConfigStore::Validate(candidate, error)) {
+            MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        const auto preferences = ListaryConfigurator::DetectPreferences();
+        if (preferences.empty()) {
+            MessageBoxW(window_, L"没有检测到 Listary 的 Preferences.json。请先安装并至少运行一次 Listary。",
+                L"配置 Listary", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        bool restartListaryOnFailure = false;
+        while (ListaryConfigurator::IsListaryRunning()) {
+            restartListaryOnFailure = true;
+            const int action = MessageBoxW(window_,
+                L"Listary 正在运行。请从 Listary 托盘菜单完全退出，然后点击“重试”。\n\n"
+                L"本工具不会强制结束 Listary，以免损坏它正在保存的配置。",
+                L"配置 Listary", MB_RETRYCANCEL | MB_ICONINFORMATION);
+            if (action != IDRETRY) {
+                if (!ListaryConfigurator::IsListaryRunning()) {
+                    std::wstring ignored;
+                    StartListary(ignored);
+                }
+                return;
+            }
+        }
+        const auto restartAfterFailure = [&]() {
+            if (!restartListaryOnFailure) return;
+            std::wstring ignored;
+            StartListary(ignored);
+        };
+        if (!ConfigStore::SaveBrowserSettings(configPath_, *selection, error)) {
+            std::wstring ignored;
+            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            restartAfterFailure();
+            MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
+            return;
+        }
+        std::wstring warning;
+        AppConfig reloaded = ConfigStore::Load(configPath_, warning);
+        if (!ConfigStore::Validate(reloaded, error)) {
+            std::wstring ignored;
+            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            restartAfterFailure();
+            MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
+            return;
+        }
+        if (!RegisterListaryProtocol(ExecutableDirectory() / L"BrowserHistoryLauncher.exe", error)) {
+            std::wstring ignored;
+            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            restartAfterFailure();
+            MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
+            return;
+        }
+        const auto statePath = configPath_.parent_path() / L"ListaryIntegrationState.ini";
+        const auto configured = ListaryConfigurator::Configure(reloaded, preferences, statePath);
+        if (!configured.ok) {
+            std::wstring ignored;
+            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            restartAfterFailure();
+            MessageBoxW(window_, configured.message.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        ++generation_;
+        searchService_.CancelAndCleanup(generation_);
+        listaryServer_.reset();
+        config_ = std::move(reloaded);
+        listaryServer_ = std::make_unique<ListarySuggestionServer>(config_);
+        std::wstring serverWarning;
+        const bool serverStarted = listaryServer_->Start(serverWarning);
+        SetWindowTextW(status_, InputHint().c_str());
+
+        std::wstring restartWarning;
+        const bool listaryStarted = StartListary(restartWarning);
+        std::wstring message = L"配置已应用。Listary 备份：\n" + configured.backupPath.wstring();
+        if (!serverStarted) message += L"\n\n建议服务警告：" + serverWarning;
+        if (!listaryStarted) message += L"\n\n" + restartWarning;
+        MessageBoxW(window_, message.c_str(), L"配置 Listary",
+            MB_OK | ((serverStarted && listaryStarted) ? MB_ICONINFORMATION : MB_ICONWARNING));
     }
 
     HINSTANCE instance_{};
     HWND window_{};
     HWND edit_{};
+    HWND configButton_{};
     HWND status_{};
     HWND list_{};
     HFONT font_{};
@@ -497,7 +658,7 @@ private:
     SnapshotManager snapshots_;
     ChromiumHistoryAdapter adapter_;
     HistorySearchService searchService_;
-    ListarySuggestionServer listaryServer_;
+    std::unique_ptr<ListarySuggestionServer> listaryServer_;
     std::vector<HistoryResult> results_;
     std::uint64_t generation_ = 0;
 };
@@ -542,6 +703,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     const auto requestedQuery = ArgumentValue(L"--query");
     const auto listaryOpenUri = ArgumentValue(L"--listary-open");
+    const bool requestedSettings = HasArgument(L"--settings");
     if (HasArgument(L"--configure-listary") || HasArgument(L"--remove-listary-integration")) {
         const bool quiet = HasArgument(L"--quiet");
         if (ListaryConfigurator::IsListaryRunning()) {
@@ -592,6 +754,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
             if (HasArgument(L"--exit")) {
                 PostMessageW(existing, kExitMessage, 0, 0);
+            } else if (requestedSettings) {
+                PostMessageW(existing, kSettingsMessage, 0, 0);
             } else if (listaryOpenUri) {
                 COPYDATASTRUCT data{};
                 data.dwData = kListaryOpenCopyData;
@@ -631,11 +795,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     App app(instance, std::move(config), configPath);
-    if (!app.Create(HasArgument(L"--show") || requestedQuery.has_value())) {
+    if (!app.Create(HasArgument(L"--show") || requestedQuery.has_value() || requestedSettings)) {
         CloseHandle(mutex);
         return 3;
     }
     if (requestedQuery) app.ShowWithQuery(*requestedQuery);
+    if (requestedSettings) app.ShowSettings();
     if (listaryOpenUri) app.OpenListaryUri(*listaryOpenUri);
     const int result = app.Run();
     CloseHandle(mutex);
