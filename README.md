@@ -20,7 +20,7 @@ build\installer\ListaryBrowserPlugin-Setup-x64.exe
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
-主窗口右上角的“配置 Listary”会重新读取 Windows 已注册浏览器，并验证其本地历史库是否符合当前 Chromium 适配器。通过验证的浏览器会自动加入下拉框，不要求预先写入 INI；选择后可设置启用状态、Listary 关键字和图标文件位置。应用会更新 INI、当前用户 `bhl://` 协议和 Listary `Preferences.json`。写入前必须从托盘完全退出 Listary，程序会创建时间戳备份，完成后重新启动 Listary。
+主窗口右上角的“配置 Listary”会重新读取 Windows 已注册浏览器，并验证其本地历史库是否符合当前 Chromium 适配器。通过验证的浏览器会自动加入下拉框，不要求预先写入 INI；选择后可设置启用状态、Listary 关键字和 ICO 图标。每次只同步当前下拉框中的浏览器，以后可逐个加入或移除其他浏览器；首次使用新版单项配置会清理旧版误批量创建的项目。应用会更新 INI、当前用户 `bhl://` 协议和 Listary `Preferences.json`。写入前必须从托盘完全退出 Listary，程序会创建时间戳备份，完成后重新启动 Listary。
 
 也可以把浏览器历史直接显示为 Listary 的网页搜索提示：本工具通过仅监听 loopback 的按需接口返回结果，并用当前用户的 `bhl://` 协议固定交回来源浏览器和 Profile 打开。完整设置值见 `docs\LISTARY_INTEGRATION.md`。普通 Listary 命令调用 `BrowserHistoryLauncher.exe --query "g github"` 仍作为原生窗口回退方式保留。
 
@@ -72,7 +72,7 @@ INI 的 `[app]` 支持：
 - `Prefix`：唯一查询前缀。
 - `Engine`：首版只能为 `chromium`。
 - `Enabled`：`true`/`false`。
-- `IconPath`：Listary 中显示的 `.ico` 或 `.exe` 图标路径；为空时使用检测到的浏览器 EXE。
+- `IconPath`：Listary 中显示的 `.ico` 图标路径；配置页会从检测到的浏览器 EXE 资源中导出真正的 ICO 到 `%LocalAppData%\BrowserHistoryLauncher\Icons`。
 - `ExecutableCandidates`：用 `|` 分隔的 EXE 候选路径，支持环境变量。
 - `UserDataCandidates`：用 `|` 分隔的 User Data 候选路径。
 - `HistoryRelativePath`：配置文件目录下的历史库相对路径，默认 `History`。

@@ -1,4 +1,5 @@
 #include "browser_discovery.h"
+#include "browser_icon.h"
 #include "browser_launcher.h"
 #include "chromium_history_adapter.h"
 #include "config_store.h"
@@ -201,6 +202,19 @@ int wmain(int argc, wchar_t** argv) {
     std::error_code ignored;
     std::filesystem::remove_all(tempRoot, ignored);
     std::filesystem::create_directories(tempRoot);
+    if (chromeDiscovery != discovery.entries.end()) {
+        const auto exportedIcon = tempRoot / L"chrome.ico";
+        Check(BrowserIcon::ExportIco(chromeDiscovery->executable, exportedIcon, error),
+            "browser executable icon exports to ICO");
+        const auto iconBytes = ReadFile(exportedIcon);
+        Check(iconBytes.size() > 6 && iconBytes[0] == '\0' && iconBytes[1] == '\0' &&
+            static_cast<unsigned char>(iconBytes[2]) == 1 && iconBytes[3] == '\0',
+            "exported browser icon has a valid ICO header");
+    }
+    if (quarkRegistration != discovery.entries.end() && quarkRegistration->chromiumCompatible) {
+        Check(BrowserIcon::ExportIco(quarkRegistration->executable, tempRoot / L"quark.ico", error),
+            "system-discovered Quark icon exports to ICO");
+    }
     const auto noHotkeyIni = tempRoot / L"no-hotkey.ini";
     {
         std::ofstream noHotkey(noHotkeyIni, std::ios::binary);
@@ -276,6 +290,24 @@ int wmain(int argc, wchar_t** argv) {
     Check(configuredAgain.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
         CountBhlInsertions(configuredDocument) == 2,
         "Listary configuration is idempotent");
+    const auto configuredEdgeOnly = ListaryConfigurator::ConfigureBrowser(
+        listaryEdge, L"e", listaryPreferences, listaryState);
+    Check(configuredEdgeOnly.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 1 && !BhlIconPath(configuredDocument, L"e").empty() &&
+        CountDisabledGoogleUpdates(configuredDocument) == 0,
+        "first per-browser configuration migrates old bulk entries to selected browser only");
+    const auto configuredChromeAlso = ListaryConfigurator::ConfigureBrowser(
+        listaryChrome, L"g", listaryPreferences, listaryState);
+    Check(configuredChromeAlso.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 2 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        "later per-browser configuration preserves previously selected browsers");
+    auto disabledEdge = listaryEdge;
+    disabledEdge.enabled = false;
+    const auto removedEdge = ListaryConfigurator::ConfigureBrowser(
+        disabledEdge, L"e", listaryPreferences, listaryState);
+    Check(removedEdge.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 1 && BhlIconPath(configuredDocument, L"e").empty(),
+        "per-browser disable removes only the selected browser");
     const auto removedListary = ListaryConfigurator::Remove(listaryPreferences, listaryState);
     Check(removedListary.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
         CountBhlInsertions(configuredDocument) == 0 && CountDisabledGoogleUpdates(configuredDocument) == 0,

@@ -180,9 +180,29 @@ bool ReadState(const std::filesystem::path& statePath) {
     return GetPrivateProfileIntW(L"listary", L"GoogleDisabledByPlugin", 0, statePath.c_str()) != 0;
 }
 
+bool ReadPerBrowserMode(const std::filesystem::path& statePath) {
+    return GetPrivateProfileIntW(L"listary", L"PerBrowserMode", 0, statePath.c_str()) != 0;
+}
+
 void WriteState(const std::filesystem::path& statePath, bool googleDisabledByPlugin) {
     WritePrivateProfileStringW(L"listary", L"GoogleDisabledByPlugin",
         googleDisabledByPlugin ? L"1" : L"0", statePath.c_str());
+}
+
+void WritePerBrowserMode(const std::filesystem::path& statePath) {
+    WritePrivateProfileStringW(L"listary", L"PerBrowserMode", L"1", statePath.c_str());
+}
+
+bool IsOurInsertionForPrefix(const JsonValue& insertion, std::wstring_view prefix) {
+    if (!IsOurInsertion(insertion)) return false;
+    const JsonValue* item = ItemObject(insertion);
+    return item && ToLowerInvariant(StringProperty(*item, L"Keyword")) == ToLowerInvariant(prefix);
+}
+
+bool HasOurGoogleInsertion(const JsonValue::Array& insertions) {
+    return std::any_of(insertions.begin(), insertions.end(), [](const JsonValue& insertion) {
+        return IsOurInsertionForPrefix(insertion, L"g");
+    });
 }
 
 bool LoadDocument(const std::filesystem::path& path, JsonValue& root, std::wstring& error) {
@@ -290,6 +310,73 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
     WriteState(statePath, googleDisabledByPlugin);
     result.ok = true;
     result.message = L"Listary 快速配置已完成。备份：" + result.backupPath.wstring();
+    return result;
+}
+
+ListaryConfigurationResult ListaryConfigurator::ConfigureBrowser(const BrowserDefinition& browser,
+    std::wstring_view previousPrefix, const std::filesystem::path& preferencesPath,
+    const std::filesystem::path& statePath) {
+    ListaryConfigurationResult result;
+    result.preferencesPath = preferencesPath;
+    if (preferencesPath.empty() || !std::filesystem::is_regular_file(preferencesPath)) {
+        result.message = L"未找到受支持的 Listary 配置文件。";
+        return result;
+    }
+
+    JsonValue root;
+    if (!LoadDocument(preferencesPath, root, result.message)) return result;
+    JsonValue* insertions = nullptr;
+    JsonValue* updates = nullptr;
+    if (!LocateWebSearch(root, insertions, updates, result.message)) return result;
+
+    auto& insertionArray = insertions->array();
+    if (!ReadPerBrowserMode(statePath)) {
+        // Migrate configurations produced by older versions, which wrote every
+        // Enabled browser even though the dialog only showed one selection.
+        std::erase_if(insertionArray, IsOurInsertion);
+    } else {
+        std::erase_if(insertionArray, [&](const JsonValue& insertion) {
+            return IsOurInsertionForPrefix(insertion, previousPrefix) ||
+                IsOurInsertionForPrefix(insertion, browser.prefix);
+        });
+    }
+
+    if (browser.enabled) {
+        for (const auto& existing : insertionArray) {
+            const JsonValue* item = ItemObject(existing);
+            if (item && ToLowerInvariant(StringProperty(*item, L"Keyword")) ==
+                    ToLowerInvariant(browser.prefix)) {
+                result.message = L"Listary 关键字已被其他自定义项目占用：" + browser.prefix;
+                return result;
+            }
+        }
+        insertionArray.push_back(MakeInsertion(browser));
+    }
+
+    auto& updateArray = updates->array();
+    const bool needsGoogleDisabled = HasOurGoogleInsertion(insertionArray);
+    const bool googleAlreadyDisabled = HasDisabledGoogleUpdate(updateArray);
+    bool googleDisabledByPlugin = ReadState(statePath);
+    if (needsGoogleDisabled && !googleAlreadyDisabled) {
+        AddDisabledGoogleUpdate(updateArray);
+        googleDisabledByPlugin = true;
+    } else if (!needsGoogleDisabled && googleDisabledByPlugin) {
+        RemoveGoogleUpdate(updateArray);
+        googleDisabledByPlugin = false;
+    }
+
+    const std::string serialized = SerializeJsonUtf8(root);
+    JsonValue verification;
+    std::wstring verificationError;
+    if (!ParseJsonUtf8(serialized, verification, verificationError)) {
+        result.message = L"生成的 Listary 配置校验失败：" + verificationError;
+        return result;
+    }
+    if (!WriteAtomic(preferencesPath, serialized, result.backupPath, result.message)) return result;
+    WriteState(statePath, googleDisabledByPlugin);
+    WritePerBrowserMode(statePath);
+    result.ok = true;
+    result.message = browser.enabled ? L"当前浏览器已同步到 Listary。" : L"当前浏览器已从 Listary 移除。";
     return result;
 }
 

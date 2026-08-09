@@ -3,6 +3,7 @@
 #include <Psapi.h>
 
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -29,9 +30,10 @@ HWND WaitForWindow(DWORD timeoutMs) {
 }
 
 std::wstring WindowText(HWND window) {
-    const int length = GetWindowTextLengthW(window);
+    const int length = static_cast<int>(SendMessageW(window, WM_GETTEXTLENGTH, 0, 0));
     std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
-    GetWindowTextW(window, text.data(), length + 1);
+    SendMessageW(window, WM_GETTEXT, static_cast<WPARAM>(length + 1),
+        reinterpret_cast<LPARAM>(text.data()));
     text.resize(static_cast<std::size_t>(length));
     return text;
 }
@@ -164,11 +166,22 @@ int wmain(int argc, wchar_t** argv) {
             HWND applyButton = nullptr;
             const auto applyDeadline = GetTickCount64() + 5000;
             while (GetTickCount64() < applyDeadline && !applyButton) {
-                applyButton = FindWindowExW(settingsWindow, nullptr, L"Button", L"保存并应用");
+                applyButton = FindWindowExW(settingsWindow, nullptr, L"Button", L"保存当前浏览器");
                 if (!applyButton) Sleep(10);
             }
             Check(applyButton != nullptr,
                 "configuration dialog exposes a clear primary action");
+            const HWND iconEdit = GetDlgItem(settingsWindow, 1004);
+            std::filesystem::path iconPath;
+            const auto iconDeadline = GetTickCount64() + 5000;
+            while (GetTickCount64() < iconDeadline && iconPath.empty()) {
+                if (iconEdit) iconPath = WindowText(iconEdit);
+                if (iconPath.empty()) Sleep(10);
+            }
+            std::error_code iconError;
+            Check(!iconPath.empty() && _wcsicmp(iconPath.extension().c_str(), L".ico") == 0 &&
+                  std::filesystem::is_regular_file(iconPath, iconError),
+                "configuration dialog auto-generates a real ICO file");
             HWND browserCombo = nullptr;
             LRESULT browserCount = 0;
             const auto browserDeadline = GetTickCount64() + 5000;

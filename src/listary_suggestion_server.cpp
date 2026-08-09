@@ -232,7 +232,8 @@ struct ListarySuggestionServer::Impl {
         std::lock_guard lock(mappingMutex);
         const auto found = mappings.find(key);
         if (found == mappings.end()) {
-            error = L"该 Listary 结果已经过期，请重新输入关键词后选择。";
+            error = L"没有找到可打开的浏览历史结果。请先确认 Listary 下拉列表中已经出现历史记录，"
+                L"再选择其中一条；历史库为空时不能直接回车。";
             return std::nullopt;
         }
         return found->second.result;

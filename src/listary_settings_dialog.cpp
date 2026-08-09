@@ -1,5 +1,6 @@
 #include "listary_settings_dialog.h"
 
+#include "browser_icon.h"
 #include "browser_launcher.h"
 #include "resource.h"
 #include "text_util.h"
@@ -215,7 +216,7 @@ private:
         Move(updateHint_, 28, 410, 624, 34);
 
         Move(bottomSeparator_, 28, 453, 624, 2);
-        Move(applyButton_, 464, 466, 88, 32);
+        Move(applyButton_, 440, 466, 112, 32);
         Move(cancelButton_, 562, 466, 90, 32);
     }
 
@@ -300,11 +301,11 @@ private:
             kIconId, WS_EX_CLIENTEDGE);
         browseButton_ = AddControl(L"BUTTON", L"选择文件…", BS_PUSHBUTTON | WS_TABSTOP, kBrowseId);
         updateHint_ = AddControl(L"STATIC",
-            L"这里设置的是 Listary 搜索关键字，不是唤醒快捷键。保存时会同步更新 bhl:// 协议和 Listary 配置。",
+            L"每次只同步当前选择的浏览器，其他浏览器不会自动加入。这里设置的是 Listary 搜索关键字，不是唤醒快捷键。",
             SS_LEFT);
         bottomSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
-        applyButton_ = AddControl(L"BUTTON", L"保存并应用", BS_DEFPUSHBUTTON | WS_TABSTOP, kApplyId);
+        applyButton_ = AddControl(L"BUTTON", L"保存当前浏览器", BS_DEFPUSHBUTTON | WS_TABSTOP, kApplyId);
         cancelButton_ = AddControl(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL);
 
         if (!titleLabel_ || !subtitleLabel_ || !browserCombo_ || !enabledCheck_ ||
@@ -380,13 +381,26 @@ private:
     void SelectBrowser() {
         const LRESULT selected = SendMessageW(browserCombo_, CB_GETCURSEL, 0, 0);
         if (selected == CB_ERR) return;
-        const auto index = static_cast<std::size_t>(SendMessageW(browserCombo_, CB_GETITEMDATA, selected, 0));
+        const auto index = static_cast<std::size_t>(selected);
         if (index >= browsers_.size()) return;
         selectedIndex_ = index;
         const auto& browser = browsers_[index];
         Button_SetCheck(enabledCheck_, browser.enabled ? BST_CHECKED : BST_UNCHECKED);
         SetWindowTextW(keywordEdit_, browser.prefix.c_str());
-        const auto icon = browser.iconPath.empty() ? executables_[index] : browser.iconPath;
+        std::filesystem::path icon = browser.iconPath;
+        std::error_code iconError;
+        if (ToLowerInvariant(icon.extension().wstring()) != L".ico" ||
+            !std::filesystem::is_regular_file(icon, iconError)) {
+            const auto cachedIcon = BrowserIcon::CachedIcoPath(browser.id);
+            iconError.clear();
+            if (std::filesystem::is_regular_file(cachedIcon, iconError)) {
+                icon = cachedIcon;
+            } else {
+                std::wstring exportError;
+                if (BrowserIcon::ExportIco(executables_[index], cachedIcon, exportError)) icon = cachedIcon;
+                else icon.clear();
+            }
+        }
         SetWindowTextW(iconEdit_, icon.c_str());
         SetWindowTextW(pathLabel_, executables_[index].empty() ?
             L"未找到浏览器程序，当前只能停用此项" : executables_[index].c_str());
@@ -398,7 +412,7 @@ private:
         std::copy_n(current.c_str(), std::min(current.size(), buffer.size() - 1), buffer.data());
         OPENFILENAMEW dialog{sizeof(dialog)};
         dialog.hwndOwner = window_;
-        dialog.lpstrFilter = L"图标或程序 (*.ico;*.exe)\0*.ico;*.exe\0所有文件 (*.*)\0*.*\0\0";
+        dialog.lpstrFilter = L"ICO 图标文件 (*.ico)\0*.ico\0\0";
         dialog.lpstrFile = buffer.data();
         dialog.nMaxFile = static_cast<DWORD>(buffer.size());
         dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
@@ -424,12 +438,17 @@ private:
         }
         if (!browser.iconPath.empty()) {
             std::error_code error;
-            if (!std::filesystem::is_regular_file(browser.iconPath, error)) {
-                MessageBoxW(window_, L"结果图标不是现有文件。请选择 .ico 文件或浏览器的 .exe 文件。",
+            if (ToLowerInvariant(browser.iconPath.extension().wstring()) != L".ico" ||
+                !std::filesystem::is_regular_file(browser.iconPath, error)) {
+                MessageBoxW(window_, L"结果图标必须是存在的 .ico 文件。",
                     L"配置 Listary", MB_OK | MB_ICONWARNING);
                 SetFocus(iconEdit_);
                 return;
             }
+        } else {
+            MessageBoxW(window_, L"没有成功生成浏览器 ICO，请重新选择浏览器或手动选择 .ico 文件。",
+                L"配置 Listary", MB_OK | MB_ICONWARNING);
+            return;
         }
         result_ = std::move(browser);
         DestroyWindow(window_);

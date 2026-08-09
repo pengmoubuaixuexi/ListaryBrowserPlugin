@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 struct ListaryConfigurationResult {
     bool ok = false;
@@ -18,6 +19,9 @@ public:
     static bool IsListaryRunning();
     static ListaryConfigurationResult Configure(const AppConfig& config,
         const std::filesystem::path& preferencesPath, const std::filesystem::path& statePath);
+    static ListaryConfigurationResult ConfigureBrowser(const BrowserDefinition& browser,
+        std::wstring_view previousPrefix, const std::filesystem::path& preferencesPath,
+        const std::filesystem::path& statePath);
     static ListaryConfigurationResult Remove(const std::filesystem::path& preferencesPath,
         const std::filesystem::path& statePath);
 };

@@ -618,7 +618,8 @@ private:
             return;
         }
         const auto statePath = configPath_.parent_path() / L"ListaryIntegrationState.ini";
-        const auto configured = ListaryConfigurator::Configure(reloaded, preferences, statePath);
+        const auto configured = ListaryConfigurator::ConfigureBrowser(*selection,
+            originalBrowser.prefix, preferences, statePath);
         if (!configured.ok) {
             std::wstring ignored;
             ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
