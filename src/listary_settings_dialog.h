@@ -6,9 +6,10 @@
 
 #include <optional>
 #include <string_view>
+#include <vector>
 
 class ListarySettingsDialog {
 public:
-    static std::optional<BrowserDefinition> Show(HINSTANCE instance, HWND owner,
+    static std::optional<std::vector<BrowserDefinition>> Show(HINSTANCE instance, HWND owner,
         const AppConfig& config, std::wstring_view discoverySummary = {});
 };

@@ -12,7 +12,7 @@
 - 开机自动启动和桌面快捷方式；
 - 安装完成后立即启动主程序的“配置 Listary”页面。
 
-主窗口右上角和托盘菜单都提供“配置 Listary”。页面每次打开都会根据 `BrowserHistoryLauncher.ini` 重新检测浏览器；内置定义包括 Chrome、Edge、Brave、Vivaldi 和 Chromium。选择浏览器后可以设置是否启用、Listary 关键字以及 `.ico`/`.exe` 图标位置。以后新安装浏览器不需要重装本工具。
+主窗口右上角和托盘菜单都提供“配置 Listary”。页面每次打开都会根据 `BrowserHistoryLauncher.ini` 重新检测浏览器；内置定义包括 Chrome、Edge、Brave、Vivaldi 和 Chromium。可在下拉框中依次选择多个浏览器并设置是否启用、Listary 关键字及 `.ico` 图标；切换选择会保留尚未应用的编辑，最后点击“保存并应用全部”。本次所有浏览器会一起写入，所以只关闭、重启一次 Listary。以后新安装浏览器不需要重装本工具。
 
 快速配置通过配置结构探测兼容 Listary 6/7，不按版本号强行写入。它只修改 `WebSearch.Items.Insertions/Updates` 兼容结构，同时更新当前用户 `bhl://` 注册表，修改前创建带时间戳的 `Preferences.json.bhl-backup-*`。主程序会自动关闭后台空闲的 Listary，写入后重启；如果 Listary 正在显示搜索或设置窗口，或进程无法关闭，才显示重试/取消。如果结构未知或关键字被其他自定义项目占用，则停止自动写入。
 
@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1 -Remov
 - 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=g&q={query}`
 - 启用：勾选
 
-输入 `g github`，选择历史结果并按 Enter，即使用来源 Chrome Profile 打开。
+输入 `g github` 后，第一行 `github` 按 Enter 会交给 Chrome 当前 Profile 的地址栏搜索；选择下面的历史结果则打开该结果自己的 URL。
 
 ## Edge 历史
 
@@ -70,7 +70,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1 -Remov
 - 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=e&q={query}`
 - 启用：勾选
 
-输入 `e microsoft`，选择历史结果并按 Enter，即使用来源 Edge Profile 打开。
+输入 `e microsoft` 后，第一行 `microsoft` 按 Enter 会交给 Edge 当前 Profile 的地址栏搜索；选择下面的历史结果则打开该结果自己的 URL。
 
 ## 开机自动启动
 

@@ -5,6 +5,7 @@
 #include "config_store.h"
 #include "json_document.h"
 #include "listary_configurator.h"
+#include "listary_suggestion_server.h"
 #include "query_parser.h"
 #include "search_fallback.h"
 #include "snapshot_manager.h"
@@ -177,6 +178,26 @@ int wmain(int argc, wchar_t** argv) {
         "bare domain is delegated to browser URL fixup without a search engine URL");
     Check(!MakeSearchFallback(genericSearchBrowser, L""),
         "empty query does not create a web-search fallback");
+    AppConfig mappingConfig;
+    mappingConfig.browsers = {genericSearchBrowser};
+    ListarySuggestionServer mappingServer(mappingConfig);
+    SearchResponse mappingResponse;
+    HistoryResult firstHistory;
+    firstHistory.title = L"百度校园招聘";
+    firstHistory.url = L"history-target";
+    firstHistory.browserId = genericSearchBrowser.id;
+    firstHistory.browserName = genericSearchBrowser.name;
+    mappingResponse.results.push_back(firstHistory);
+    mappingServer.CacheMappingsForTest(genericSearchBrowser, L"q", L"百度", mappingResponse);
+    std::wstring mappingError;
+    const auto rawQuerySelection = mappingServer.ResolveUri(
+        L"bhl://open?prefix=q&selection=百度", mappingError);
+    const auto historySelection = mappingServer.ResolveUri(
+        L"bhl://open?prefix=q&selection=百度校园招聘", mappingError);
+    Check(rawQuerySelection && rawQuerySelection->url == L"? 百度",
+        "Listary raw-query first row always maps to browser omnibox search");
+    Check(historySelection && historySelection->url == L"history-target",
+        "Listary history rows keep their own URL mappings");
 
     const std::filesystem::path ini = argc > 1 ? argv[1] : L"BrowserHistoryLauncher.ini";
     std::wstring warning;
@@ -315,6 +336,25 @@ int wmain(int argc, wchar_t** argv) {
         Check(saved != persisted.browsers.end() && saved->enabled && saved->prefix == L"bb" &&
             saved->iconPath == noHotkeyIni,
             "browser enabled state, keyword, and icon round-trip");
+    }
+    auto batchConfig = ConfigStore::Load(editableIni, warning);
+    auto batchChrome = std::find_if(batchConfig.browsers.begin(), batchConfig.browsers.end(),
+        [](const BrowserDefinition& browser) { return browser.id == L"chrome"; });
+    auto batchEdge = std::find_if(batchConfig.browsers.begin(), batchConfig.browsers.end(),
+        [](const BrowserDefinition& browser) { return browser.id == L"edge"; });
+    if (batchChrome != batchConfig.browsers.end() && batchEdge != batchConfig.browsers.end()) {
+        batchChrome->prefix = L"gc";
+        batchEdge->prefix = L"me";
+        Check(ConfigStore::SaveBrowserSettings(editableIni, {*batchChrome, *batchEdge}, error),
+            "multiple browser settings persist in one atomic INI replacement");
+        const auto batchPersisted = ConfigStore::Load(editableIni, warning);
+        const auto savedChrome = std::find_if(batchPersisted.browsers.begin(), batchPersisted.browsers.end(),
+            [](const BrowserDefinition& browser) { return browser.id == L"chrome"; });
+        const auto savedEdge = std::find_if(batchPersisted.browsers.begin(), batchPersisted.browsers.end(),
+            [](const BrowserDefinition& browser) { return browser.id == L"edge"; });
+        Check(savedChrome != batchPersisted.browsers.end() && savedEdge != batchPersisted.browsers.end() &&
+            savedChrome->prefix == L"gc" && savedEdge->prefix == L"me",
+            "batch browser settings round-trip together");
     }
     JsonValue jsonRoundTrip;
     std::wstring jsonError;

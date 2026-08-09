@@ -166,7 +166,7 @@ int wmain(int argc, wchar_t** argv) {
             HWND applyButton = nullptr;
             const auto applyDeadline = GetTickCount64() + 5000;
             while (GetTickCount64() < applyDeadline && !applyButton) {
-                applyButton = FindWindowExW(settingsWindow, nullptr, L"Button", L"保存当前浏览器");
+                applyButton = FindWindowExW(settingsWindow, nullptr, L"Button", L"保存并应用全部");
                 if (!applyButton) Sleep(10);
             }
             Check(applyButton != nullptr,
@@ -195,6 +195,25 @@ int wmain(int argc, wchar_t** argv) {
             Check(browserCombo && SendMessageW(browserCombo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
                 reinterpret_cast<LPARAM>(L"Quark")) != CB_ERR,
                 "browser dropdown discovers registered Quark without a predefined INI section");
+            const HWND enabledCheck = GetDlgItem(settingsWindow, 1002);
+            if (browserCombo && enabledCheck && browserCount >= 2) {
+                const LRESULT initialBrowser = SendMessageW(browserCombo, CB_GETCURSEL, 0, 0);
+                const LRESULT initialChecked = SendMessageW(enabledCheck, BM_GETCHECK, 0, 0);
+                SendMessageW(enabledCheck, BM_CLICK, 0, 0);
+                const LRESULT changedChecked = SendMessageW(enabledCheck, BM_GETCHECK, 0, 0);
+                const LRESULT otherBrowser = initialBrowser == 0 ? 1 : 0;
+                SendMessageW(browserCombo, CB_SETCURSEL, otherBrowser, 0);
+                SendMessageW(settingsWindow, WM_COMMAND, MAKEWPARAM(1001, CBN_SELCHANGE),
+                    reinterpret_cast<LPARAM>(browserCombo));
+                SendMessageW(browserCombo, CB_SETCURSEL, initialBrowser, 0);
+                SendMessageW(settingsWindow, WM_COMMAND, MAKEWPARAM(1001, CBN_SELCHANGE),
+                    reinterpret_cast<LPARAM>(browserCombo));
+                Check(changedChecked != initialChecked &&
+                    SendMessageW(enabledCheck, BM_GETCHECK, 0, 0) == changedChecked,
+                    "configuration dialog retains multiple browser drafts until one final save");
+            } else {
+                Check(false, "configuration dialog retains multiple browser drafts until one final save");
+            }
             RECT comboRect{};
             RECT applyRect{};
             if (browserCombo) GetWindowRect(browserCombo, &comboRect);

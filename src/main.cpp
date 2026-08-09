@@ -550,19 +550,23 @@ private:
     void ShowListarySettings() {
         const auto discovery = BrowserDiscovery::Scan(config_);
         BrowserDiscovery::MergeCompatible(config_, discovery);
-        const auto selection = ListarySettingsDialog::Show(instance_, window_, config_, discovery.Summary());
-        if (!selection) return;
+        const auto selections = ListarySettingsDialog::Show(instance_, window_, config_, discovery.Summary());
+        if (!selections) return;
 
         AppConfig candidate = config_;
-        auto browser = std::find_if(candidate.browsers.begin(), candidate.browsers.end(),
-            [&](const BrowserDefinition& item) { return item.id == selection->id; });
-        if (browser == candidate.browsers.end()) {
-            MessageBoxW(window_, L"浏览器定义已经失效，请重新打开配置页。",
-                L"配置 Listary", MB_OK | MB_ICONERROR);
-            return;
+        std::vector<BrowserDefinition> originalSettings;
+        originalSettings.reserve(selections->size());
+        for (const auto& selection : *selections) {
+            auto browser = std::find_if(candidate.browsers.begin(), candidate.browsers.end(),
+                [&](const BrowserDefinition& item) { return item.id == selection.id; });
+            if (browser == candidate.browsers.end()) {
+                MessageBoxW(window_, L"浏览器定义已经失效，请重新打开配置页。",
+                    L"配置 Listary", MB_OK | MB_ICONERROR);
+                return;
+            }
+            originalSettings.push_back(*browser);
+            *browser = selection;
         }
-        const BrowserDefinition originalBrowser = *browser;
-        *browser = *selection;
         std::wstring error;
         if (!ConfigStore::Validate(candidate, error)) {
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONWARNING);
@@ -592,9 +596,7 @@ private:
             std::wstring ignored;
             StartListary(ignored);
         };
-        if (!ConfigStore::SaveBrowserSettings(configPath_, *selection, error)) {
-            std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+        if (!ConfigStore::SaveBrowserSettings(configPath_, *selections, error)) {
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -603,24 +605,23 @@ private:
         AppConfig reloaded = ConfigStore::Load(configPath_, warning);
         if (!ConfigStore::Validate(reloaded, error)) {
             std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            ConfigStore::SaveBrowserSettings(configPath_, originalSettings, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
         }
         if (!RegisterListaryProtocol(ExecutableDirectory() / L"BrowserHistoryLauncher.exe", error)) {
             std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            ConfigStore::SaveBrowserSettings(configPath_, originalSettings, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
         }
         const auto statePath = configPath_.parent_path() / L"ListaryIntegrationState.ini";
-        const auto configured = ListaryConfigurator::ConfigureBrowser(*selection,
-            originalBrowser.prefix, preferences, statePath);
+        const auto configured = ListaryConfigurator::Configure(reloaded, preferences, statePath);
         if (!configured.ok) {
             std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalBrowser, ignored);
+            ConfigStore::SaveBrowserSettings(configPath_, originalSettings, ignored);
             restartAfterFailure();
             MessageBoxW(window_, configured.message.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -637,7 +638,10 @@ private:
 
         std::wstring restartWarning;
         const bool listaryStarted = StartListary(restartWarning);
-        std::wstring message = L"配置已应用。Listary 备份：\n" + configured.backupPath.wstring();
+        const auto enabledCount = std::count_if(config_.browsers.begin(), config_.browsers.end(),
+            [](const BrowserDefinition& browser) { return browser.enabled; });
+        std::wstring message = L"已一次应用 " + std::to_wstring(enabledCount) +
+            L" 个浏览器，Listary 只重启了一次。备份：\n" + configured.backupPath.wstring();
         if (!serverStarted) message += L"\n\n建议服务警告：" + serverWarning;
         if (!listaryStarted) message += L"\n\n" + restartWarning;
         MessageBoxW(window_, message.c_str(), L"配置 Listary",

@@ -20,6 +20,10 @@ public:
 
     bool Start(std::wstring& error);
     std::optional<HistoryResult> ResolveUri(std::wstring_view uri, std::wstring& error) const;
+#ifdef BHL_TESTING
+    void CacheMappingsForTest(const BrowserDefinition& browser, std::wstring_view prefix,
+        std::wstring_view query, const SearchResponse& response);
+#endif
 
 private:
     struct Impl;

@@ -47,8 +47,8 @@ bool ValidKeyword(std::wstring_view keyword) {
 class DialogState {
 public:
     DialogState(HINSTANCE instance, HWND owner, const AppConfig& config,
-        std::wstring_view discoverySummary)
-        : instance_(instance), owner_(owner), discoverySummary_(discoverySummary) {
+        std::wstring_view)
+        : instance_(instance), owner_(owner) {
         for (const auto& browser : config.browsers) {
             const auto executable = BrowserLauncher::FindExecutable(browser);
             if (executable.empty() && !browser.enabled) continue;
@@ -61,7 +61,7 @@ public:
         DeleteFonts();
     }
 
-    std::optional<BrowserDefinition> Run() {
+    std::optional<std::vector<BrowserDefinition>> Run() {
         WNDCLASSEXW windowClass{sizeof(windowClass)};
         windowClass.lpfnWndProc = WindowProc;
         windowClass.hInstance = instance_;
@@ -276,7 +276,7 @@ private:
         CreateFonts();
         titleLabel_ = AddControl(L"STATIC", L"配置 Listary 浏览器搜索", SS_LEFT);
         subtitleLabel_ = AddControl(L"STATIC",
-            L"选择浏览器并设置搜索关键字。保存后，可直接在 Listary 下拉列表中搜索浏览历史。",
+            L"可依次选择并启用多个浏览器；切换时会保留本页修改，最后统一保存并重启一次 Listary。",
             SS_LEFT);
         topSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
@@ -301,11 +301,11 @@ private:
             kIconId, WS_EX_CLIENTEDGE);
         browseButton_ = AddControl(L"BUTTON", L"选择文件…", BS_PUSHBUTTON | WS_TABSTOP, kBrowseId);
         updateHint_ = AddControl(L"STATIC",
-            L"每次只同步当前选择的浏览器，其他浏览器不会自动加入。这里设置的是 Listary 搜索关键字，不是唤醒快捷键。",
+            L"切换下拉框可继续配置其他浏览器，点击“保存并应用全部”后统一同步。这里设置的是 Listary 搜索关键字，不是唤醒快捷键。",
             SS_LEFT);
         bottomSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
-        applyButton_ = AddControl(L"BUTTON", L"保存当前浏览器", BS_DEFPUSHBUTTON | WS_TABSTOP, kApplyId);
+        applyButton_ = AddControl(L"BUTTON", L"保存并应用全部", BS_DEFPUSHBUTTON | WS_TABSTOP, kApplyId);
         cancelButton_ = AddControl(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL);
 
         if (!titleLabel_ || !subtitleLabel_ || !browserCombo_ || !enabledCheck_ ||
@@ -339,11 +339,8 @@ private:
             SetWindowTextW(browserSummary_, L"没有找到历史结构可接入的浏览器。重新打开此页面可再次检测。");
             SetWindowTextW(pathLabel_, L"—");
         } else {
-            std::wstring summary = discoverySummary_.empty() ?
-                L"已检测到 " + std::to_wstring(detectedCount) +
-                    L" 个可配置浏览器；重新打开此页面即可刷新检测结果。" :
-                discoverySummary_;
-            SetWindowTextW(browserSummary_, summary.c_str());
+            detectedCount_ = detectedCount;
+            UpdateBrowserSummary();
             const auto enabled = std::find_if(browsers_.begin(), browsers_.end(),
                 [](const BrowserDefinition& browser) { return browser.enabled; });
             const LRESULT initialIndex = enabled == browsers_.end() ? 0 :
@@ -406,6 +403,23 @@ private:
             L"未找到浏览器程序，当前只能停用此项" : executables_[index].c_str());
     }
 
+    void SaveCurrentDraft() {
+        if (selectedIndex_ >= browsers_.size()) return;
+        auto& browser = browsers_[selectedIndex_];
+        browser.enabled = Button_GetCheck(enabledCheck_) == BST_CHECKED;
+        browser.prefix = ToLowerInvariant(Trim(ControlText(keywordEdit_)));
+        browser.iconPath = Trim(ControlText(iconEdit_));
+    }
+
+    void UpdateBrowserSummary() const {
+        const auto enabledCount = std::count_if(browsers_.begin(), browsers_.end(),
+            [](const BrowserDefinition& browser) { return browser.enabled; });
+        const std::wstring summary = L"已检测到 " + std::to_wstring(detectedCount_) +
+            L" 个可配置浏览器；本次将启用 " + std::to_wstring(enabledCount) +
+            L" 个。重新打开此页面可刷新检测结果。";
+        SetWindowTextW(browserSummary_, summary.c_str());
+    }
+
     void BrowseIcon() {
         std::wstring buffer(32768, L'\0');
         const std::wstring current = ControlText(iconEdit_);
@@ -420,42 +434,50 @@ private:
     }
 
     void Apply() {
-        if (selectedIndex_ >= browsers_.size()) return;
-        BrowserDefinition browser = browsers_[selectedIndex_];
-        browser.enabled = Button_GetCheck(enabledCheck_) == BST_CHECKED;
-        browser.prefix = ToLowerInvariant(Trim(ControlText(keywordEdit_)));
-        browser.iconPath = Trim(ControlText(iconEdit_));
-        if (!ValidKeyword(browser.prefix)) {
-            MessageBoxW(window_, L"搜索关键字应为 1–16 个字母、数字、- 或 _。",
-                L"配置 Listary", MB_OK | MB_ICONWARNING);
-            SetFocus(keywordEdit_);
-            return;
-        }
-        if (browser.enabled && executables_[selectedIndex_].empty()) {
-            MessageBoxW(window_, L"没有检测到该浏览器的可执行文件，不能启用。",
-                L"配置 Listary", MB_OK | MB_ICONWARNING);
-            return;
-        }
-        if (!browser.iconPath.empty()) {
+        SaveCurrentDraft();
+        for (std::size_t index = 0; index < browsers_.size(); ++index) {
+            const auto& browser = browsers_[index];
+            if (!ValidKeyword(browser.prefix)) {
+                MessageBoxW(window_, (browser.name +
+                    L" 的搜索关键字应为 1–16 个字母、数字、- 或 _。").c_str(),
+                    L"配置 Listary", MB_OK | MB_ICONWARNING);
+                SendMessageW(browserCombo_, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+                SelectBrowser();
+                SetFocus(keywordEdit_);
+                return;
+            }
+            if (!browser.enabled) continue;
+            if (executables_[index].empty()) {
+                MessageBoxW(window_, (L"没有检测到 " + browser.name + L" 的可执行文件，不能启用。").c_str(),
+                    L"配置 Listary", MB_OK | MB_ICONWARNING);
+                SendMessageW(browserCombo_, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+                SelectBrowser();
+                return;
+            }
             std::error_code error;
             if (ToLowerInvariant(browser.iconPath.extension().wstring()) != L".ico" ||
                 !std::filesystem::is_regular_file(browser.iconPath, error)) {
-                MessageBoxW(window_, L"结果图标必须是存在的 .ico 文件。",
+                MessageBoxW(window_, (browser.name + L" 的结果图标必须是存在的 .ico 文件。").c_str(),
                     L"配置 Listary", MB_OK | MB_ICONWARNING);
+                SendMessageW(browserCombo_, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+                SelectBrowser();
                 SetFocus(iconEdit_);
                 return;
             }
-        } else {
-            MessageBoxW(window_, L"没有成功生成浏览器 ICO，请重新选择浏览器或手动选择 .ico 文件。",
-                L"配置 Listary", MB_OK | MB_ICONWARNING);
-            return;
         }
-        result_ = std::move(browser);
+        result_ = browsers_;
         DestroyWindow(window_);
     }
 
     LRESULT OnCommand(int id, int notification) {
-        if (id == kBrowserId && notification == CBN_SELCHANGE) SelectBrowser();
+        if (id == kBrowserId && notification == CBN_SELCHANGE) {
+            SaveCurrentDraft();
+            SelectBrowser();
+        }
+        else if (id == kEnabledId && notification == BN_CLICKED) {
+            SaveCurrentDraft();
+            UpdateBrowserSummary();
+        }
         else if (id == kBrowseId && notification == BN_CLICKED) BrowseIcon();
         else if (id == kApplyId && notification == BN_CLICKED) Apply();
         else if (id == IDCANCEL && notification == BN_CLICKED) DestroyWindow(window_);
@@ -499,12 +521,12 @@ private:
     std::vector<BrowserDefinition> browsers_;
     std::vector<std::filesystem::path> executables_;
     std::size_t selectedIndex_ = static_cast<std::size_t>(-1);
-    std::optional<BrowserDefinition> result_;
-    std::wstring discoverySummary_;
+    std::size_t detectedCount_ = 0;
+    std::optional<std::vector<BrowserDefinition>> result_;
 };
 }
 
-std::optional<BrowserDefinition> ListarySettingsDialog::Show(HINSTANCE instance, HWND owner,
+std::optional<std::vector<BrowserDefinition>> ListarySettingsDialog::Show(HINSTANCE instance, HWND owner,
     const AppConfig& config, std::wstring_view discoverySummary) {
     DialogState dialog(instance, owner, config, discoverySummary);
     return dialog.Run();

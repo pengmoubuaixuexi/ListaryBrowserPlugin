@@ -6,6 +6,7 @@
 #include "browser_registry.h"
 #include "chromium_history_adapter.h"
 #include "history_search_service.h"
+#include "search_fallback.h"
 #include "snapshot_manager.h"
 #include "text_util.h"
 
@@ -316,7 +317,7 @@ struct ListarySuggestionServer::Impl {
         SearchResponse completed = std::move(*response);
         response.reset();
         lock.unlock();
-        CacheMappings(*prefix, *query, completed);
+        CacheMappings(*browser, *prefix, *query, completed);
         const auto body = SuggestionJson(*query, completed);
         SendResponse(client, 200, "OK", "application/json; charset=utf-8", body);
     }
@@ -325,15 +326,19 @@ struct ListarySuggestionServer::Impl {
         return ToLowerInvariant(prefix) + L"\n" + std::wstring(selection);
     }
 
-    void CacheMappings(std::wstring_view prefix, std::wstring_view query, const SearchResponse& completed) {
+    void CacheMappings(const BrowserDefinition& browser, std::wstring_view prefix,
+        std::wstring_view query, const SearchResponse& completed) {
         const auto normalizedPrefix = ToLowerInvariant(prefix);
         std::lock_guard lock(mappingMutex);
         for (const auto& result : completed.results) {
             const auto display = DisplayText(result);
             if (!display.empty()) StoreMapping(MappingKey(normalizedPrefix, display), result);
         }
-        if (!completed.results.empty() && !query.empty()) {
-            StoreMapping(MappingKey(normalizedPrefix, query), completed.results.front());
+        // Listary always renders the raw query as its first selectable row. It
+        // must mean "search/open this input", independently of the first
+        // history suggestion shown below it.
+        if (auto fallback = MakeSearchFallback(browser, query)) {
+            StoreMapping(MappingKey(normalizedPrefix, query), *fallback);
         }
     }
 
@@ -385,3 +390,10 @@ bool ListarySuggestionServer::Start(std::wstring& error) {
 std::optional<HistoryResult> ListarySuggestionServer::ResolveUri(std::wstring_view uri, std::wstring& error) const {
     return impl_->ResolveUri(uri, error);
 }
+
+#ifdef BHL_TESTING
+void ListarySuggestionServer::CacheMappingsForTest(const BrowserDefinition& browser,
+    std::wstring_view prefix, std::wstring_view query, const SearchResponse& response) {
+    impl_->CacheMappings(browser, prefix, query, response);
+}
+#endif

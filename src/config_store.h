@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 class ConfigStore {
 public:
@@ -11,5 +12,7 @@ public:
     static bool Validate(const AppConfig& config, std::wstring& error);
     static bool SaveBrowserSettings(const std::filesystem::path& iniPath,
         const BrowserDefinition& browser, std::wstring& error);
+    static bool SaveBrowserSettings(const std::filesystem::path& iniPath,
+        const std::vector<BrowserDefinition>& browsers, std::wstring& error);
     static AppConfig Defaults();
 };

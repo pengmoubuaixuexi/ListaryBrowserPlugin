@@ -226,6 +226,36 @@ bool ConfigStore::SaveBrowserSettings(const std::filesystem::path& iniPath,
     return true;
 }
 
+bool ConfigStore::SaveBrowserSettings(const std::filesystem::path& iniPath,
+    const std::vector<BrowserDefinition>& browsers, std::wstring& error) {
+    const auto temporaryPath = std::filesystem::path(iniPath.wstring() + L".bhl-tmp");
+    std::error_code fileError;
+    std::filesystem::remove(temporaryPath, fileError);
+    fileError.clear();
+    if (std::filesystem::exists(iniPath, fileError)) {
+        std::filesystem::copy_file(iniPath, temporaryPath,
+            std::filesystem::copy_options::overwrite_existing, fileError);
+        if (fileError) {
+            error = L"无法创建配置文件临时副本：" + temporaryPath.wstring() + L"。";
+            return false;
+        }
+    }
+    for (const auto& browser : browsers) {
+        if (!SaveBrowserSettings(temporaryPath, browser, error)) {
+            std::filesystem::remove(temporaryPath, fileError);
+            return false;
+        }
+    }
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, temporaryPath.c_str());
+    if (!MoveFileExW(temporaryPath.c_str(), iniPath.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        error = L"无法替换配置文件：" + FormatWindowsError(GetLastError());
+        std::filesystem::remove(temporaryPath, fileError);
+        return false;
+    }
+    return true;
+}
+
 bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {
     std::set<std::wstring> prefixes;
     for (const auto& browser : config.browsers) {
