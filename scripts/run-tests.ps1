@@ -11,6 +11,8 @@ $ini = Join-Path $root 'BrowserHistoryLauncher.ini'
 $coreExit = $LASTEXITCODE
 & $ui $app
 $uiExit = $LASTEXITCODE
-if ($coreExit -ne 0 -or $uiExit -ne 0) {
-    throw "Acceptance tests failed. core=$coreExit ui=$uiExit"
+& (Join-Path $PSScriptRoot 'test-bluetooth.ps1') -Executable $app
+$bluetoothExit = $LASTEXITCODE
+if ($coreExit -ne 0 -or $uiExit -ne 0 -or $bluetoothExit -ne 0) {
+    throw "Acceptance tests failed. core=$coreExit ui=$uiExit bluetooth=$bluetoothExit"
 }

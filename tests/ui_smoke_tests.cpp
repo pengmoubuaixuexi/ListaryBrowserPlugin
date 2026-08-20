@@ -29,6 +29,31 @@ HWND WaitForWindow(DWORD timeoutMs) {
     return nullptr;
 }
 
+bool AdoptRecycledHost(PROCESS_INFORMATION& process, HWND& window, DWORD timeoutMs) {
+    const DWORD previousProcessId = process.dwProcessId;
+    if (WaitForSingleObject(process.hProcess, timeoutMs) != WAIT_OBJECT_0) return false;
+    CloseHandle(process.hProcess);
+    process.hProcess = nullptr;
+    const auto deadline = GetTickCount64() + timeoutMs;
+    while (GetTickCount64() < deadline) {
+        HWND candidate = FindWindowW(kWindowClass, nullptr);
+        DWORD candidateProcessId = 0;
+        if (candidate) GetWindowThreadProcessId(candidate, &candidateProcessId);
+        if (candidate && candidateProcessId && candidateProcessId != previousProcessId) {
+            HANDLE handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | SYNCHRONIZE,
+                FALSE, candidateProcessId);
+            if (handle) {
+                process.hProcess = handle;
+                process.dwProcessId = candidateProcessId;
+                window = candidate;
+                return true;
+            }
+        }
+        Sleep(20);
+    }
+    return false;
+}
+
 std::wstring WindowText(HWND window) {
     const int length = static_cast<int>(SendMessageW(window, WM_GETTEXTLENGTH, 0, 0));
     std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
@@ -156,7 +181,12 @@ int wmain(int argc, wchar_t** argv) {
             Check(GetClassLongPtrW(settingsWindow, GCLP_HICON) != 0,
                 "configuration dialog uses the embedded application icon");
             RECT settingsClient{};
-            GetClientRect(settingsWindow, &settingsClient);
+            const auto settingsLayoutDeadline = GetTickCount64() + 5000;
+            while (GetTickCount64() < settingsLayoutDeadline &&
+                   (settingsClient.right < 678 || settingsClient.bottom < 508)) {
+                GetClientRect(settingsWindow, &settingsClient);
+                if (settingsClient.right < 678 || settingsClient.bottom < 508) Sleep(10);
+            }
             const UINT settingsDpi = GetDpiForWindow(settingsWindow);
             std::cout << "METRIC settings_dpi=" << settingsDpi
                       << " settings_client_width=" << settingsClient.right
@@ -171,6 +201,13 @@ int wmain(int argc, wchar_t** argv) {
             }
             Check(applyButton != nullptr,
                 "configuration dialog exposes a clear primary action");
+            const HWND bluetoothEnabled = GetDlgItem(settingsWindow, 1101);
+            const HWND bluetoothKeyword = GetDlgItem(settingsWindow, 1102);
+            Check(bluetoothEnabled && bluetoothKeyword,
+                "configuration dialog exposes Bluetooth enabled and keyword controls");
+            Check(bluetoothEnabled && SendMessageW(bluetoothEnabled, BM_GETCHECK, 0, 0) == BST_CHECKED &&
+                bluetoothKeyword && WindowText(bluetoothKeyword) == L"ly",
+                "Bluetooth controls load the active configuration");
             const HWND iconEdit = GetDlgItem(settingsWindow, 1004);
             std::filesystem::path iconPath;
             const auto iconDeadline = GetTickCount64() + 5000;
@@ -245,7 +282,9 @@ int wmain(int argc, wchar_t** argv) {
     Check(ListView_GetItemCount(list) > 0, "first --query invocation populates Chrome history");
 
     SendMessageW(window, WM_CLOSE, 0, 0);
-    Sleep(800);
+    const bool firstRecycle = AdoptRecycledHost(process, window, 5000);
+    Check(firstRecycle, "hidden fallback UI is recycled into a clean Listary host");
+    Sleep(500);
     const auto idleMemory = Memory(process.hProcess);
     const auto idlePrivateWorkingSet = PrivateWorkingSet(process.hProcess);
     const double idleCpu = CpuPercent(process.hProcess, 1000);
@@ -303,11 +342,15 @@ int wmain(int argc, wchar_t** argv) {
         SendMessageW(window, kShowMessage, 0, 0);
         SendMessageW(window, WM_CLOSE, 0, 0);
     }
+    const bool cycleRecycle = AdoptRecycledHost(process, window, 5000);
+    Check(cycleRecycle, "show/hide cycles finish with a clean recycled host");
     Sleep(500);
     const auto afterCycles = PrivateWorkingSet(process.hProcess);
     std::cout << "METRIC cycle_count=100 private_ws_before=" << beforeCycles
               << " private_ws_after=" << afterCycles << '\n';
     Check(afterCycles <= beforeCycles + 1024 * 1024, "100 show/hide cycles do not grow private working set by >1 MB");
+    Check(afterCycles > 0 && afterCycles <= 15ULL * 1024 * 1024,
+        "recycled Listary-only host returns to <= 15 MB private working set");
 
     PostMessageW(window, kExitMessage, 0, 0);
     const DWORD wait = WaitForSingleObject(process.hProcess, 5000);

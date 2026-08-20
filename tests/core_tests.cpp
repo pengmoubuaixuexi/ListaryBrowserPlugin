@@ -94,7 +94,7 @@ std::size_t CountBhlInsertions(const JsonValue& root) {
     for (const auto& insertion : insertions->array()) {
         const auto* item = insertion.Find(L"Item");
         const auto* url = item ? item->Find(L"Url") : nullptr;
-        if (url && url->type() == JsonValue::Type::String && StartsWithInsensitive(url->text(), L"bhl://open?")) ++count;
+        if (url && url->type() == JsonValue::Type::String && StartsWithInsensitive(url->text(), L"bhl://")) ++count;
     }
     return count;
 }
@@ -194,10 +194,21 @@ int wmain(int argc, wchar_t** argv) {
         L"bhl://open?prefix=q&selection=百度", mappingError);
     const auto historySelection = mappingServer.ResolveUri(
         L"bhl://open?prefix=q&selection=百度校园招聘", mappingError);
-    Check(rawQuerySelection && rawQuerySelection->url == L"? 百度",
+    Check(rawQuerySelection && rawQuerySelection->kind == ListaryActionKind::BrowserOpen &&
+        rawQuerySelection->browserResult.url == L"? 百度",
         "Listary raw-query first row always maps to browser omnibox search");
-    Check(historySelection && historySelection->url == L"history-target",
+    Check(historySelection && historySelection->kind == ListaryActionKind::BrowserOpen &&
+        historySelection->browserResult.url == L"history-target",
         "Listary history rows keep their own URL mappings");
+    BluetoothDeviceTarget bluetoothTarget;
+    bluetoothTarget.stableKey = L"address:test";
+    bluetoothTarget.displayName = L"AirPods";
+    mappingServer.CacheBluetoothMappingsForTest(L"ly", L"air", {bluetoothTarget});
+    const auto bluetoothSelection = mappingServer.ResolveUri(
+        L"bhl://bluetooth?prefix=ly&selection=AirPods%20%20%E2%80%94%20%20%E6%9C%AA%E8%BF%9E%E6%8E%A5", mappingError);
+    Check(bluetoothSelection && bluetoothSelection->kind == ListaryActionKind::BluetoothConnect &&
+        bluetoothSelection->bluetoothTarget.stableKey == bluetoothTarget.stableKey,
+        "Listary Bluetooth suggestion maps to an internal device target");
 
     const std::filesystem::path ini = argc > 1 ? argv[1] : L"BrowserHistoryLauncher.ini";
     std::wstring warning;
@@ -248,6 +259,13 @@ int wmain(int argc, wchar_t** argv) {
         duplicate.browsers[1].enabled = true;
         duplicate.browsers[1].prefix = duplicate.browsers[0].prefix;
         Check(!ConfigStore::Validate(duplicate, error), "duplicate prefix is rejected");
+    }
+    auto bluetoothCollision = config;
+    if (!bluetoothCollision.browsers.empty()) {
+        bluetoothCollision.browsers.front().enabled = true;
+        bluetoothCollision.browsers.front().prefix = bluetoothCollision.bluetooth.keyword;
+        Check(!ConfigStore::Validate(bluetoothCollision, error),
+            "Bluetooth keyword collision with a browser prefix is rejected");
     }
 
     const auto tempRoot = std::filesystem::temp_directory_path() /
@@ -356,6 +374,15 @@ int wmain(int argc, wchar_t** argv) {
             savedChrome->prefix == L"gc" && savedEdge->prefix == L"me",
             "batch browser settings round-trip together");
     }
+    auto listarySettingsConfig = ConfigStore::Load(editableIni, warning);
+    listarySettingsConfig.bluetooth.enabled = false;
+    listarySettingsConfig.bluetooth.keyword = L"bt";
+    Check(ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
+        listarySettingsConfig.bluetooth, error), "browser and Bluetooth settings persist atomically");
+    const auto listarySettingsPersisted = ConfigStore::Load(editableIni, warning);
+    Check(!listarySettingsPersisted.bluetooth.enabled &&
+        listarySettingsPersisted.bluetooth.keyword == L"bt",
+        "Bluetooth enabled state and keyword round-trip");
     JsonValue jsonRoundTrip;
     std::wstring jsonError;
     Check(ParseJsonUtf8("{\"text\":\"\\u4e2d\\u6587\",\"array\":[true,false,null,-1.25e2]}",
@@ -393,31 +420,31 @@ int wmain(int argc, wchar_t** argv) {
         "Listary configuration creates a backup");
     JsonValue configuredDocument;
     Check(ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 2 && CountDisabledGoogleUpdates(configuredDocument) == 1,
-        "Listary configuration adds browser entries and resolves built-in g conflict");
+        CountBhlInsertions(configuredDocument) == 3 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        "Listary configuration adds browser and Bluetooth entries and resolves built-in g conflict");
     Check(BhlIconPath(configuredDocument, L"g") == noHotkeyIni.wstring(),
         "Listary insertion uses the configured icon path");
     const auto configuredAgain = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
     Check(configuredAgain.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 2,
+        CountBhlInsertions(configuredDocument) == 3,
         "Listary configuration is idempotent");
     const auto configuredEdgeOnly = ListaryConfigurator::ConfigureBrowser(
         listaryEdge, L"e", listaryPreferences, listaryState);
     Check(configuredEdgeOnly.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 1 && !BhlIconPath(configuredDocument, L"e").empty() &&
+        CountBhlInsertions(configuredDocument) == 2 && !BhlIconPath(configuredDocument, L"e").empty() &&
         CountDisabledGoogleUpdates(configuredDocument) == 0,
         "first per-browser configuration migrates old bulk entries to selected browser only");
     const auto configuredChromeAlso = ListaryConfigurator::ConfigureBrowser(
         listaryChrome, L"g", listaryPreferences, listaryState);
     Check(configuredChromeAlso.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 2 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        CountBhlInsertions(configuredDocument) == 3 && CountDisabledGoogleUpdates(configuredDocument) == 1,
         "later per-browser configuration preserves previously selected browsers");
     auto disabledEdge = listaryEdge;
     disabledEdge.enabled = false;
     const auto removedEdge = ListaryConfigurator::ConfigureBrowser(
         disabledEdge, L"e", listaryPreferences, listaryState);
     Check(removedEdge.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 1 && BhlIconPath(configuredDocument, L"e").empty(),
+        CountBhlInsertions(configuredDocument) == 2 && BhlIconPath(configuredDocument, L"e").empty(),
         "per-browser disable removes only the selected browser");
     const auto removedListary = ListaryConfigurator::Remove(listaryPreferences, listaryState);
     Check(removedListary.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&

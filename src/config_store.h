@@ -14,5 +14,8 @@ public:
         const BrowserDefinition& browser, std::wstring& error);
     static bool SaveBrowserSettings(const std::filesystem::path& iniPath,
         const std::vector<BrowserDefinition>& browsers, std::wstring& error);
+    static bool SaveListarySettings(const std::filesystem::path& iniPath,
+        const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
+        std::wstring& error);
     static AppConfig Defaults();
 };

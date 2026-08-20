@@ -1,4 +1,5 @@
 #include "browser_discovery.h"
+#include "bluetooth_worker.h"
 #include "browser_launcher.h"
 #include "browser_registry.h"
 #include "chromium_history_adapter.h"
@@ -17,6 +18,9 @@
 #include <Shellapi.h>
 #include <windowsx.h>
 
+#include <atomic>
+#include <thread>
+
 #include <algorithm>
 #include <filesystem>
 #include <memory>
@@ -29,12 +33,14 @@ constexpr wchar_t kWindowClass[] = L"BrowserHistoryLauncher.SearchWindow";
 constexpr wchar_t kMutexName[] = L"Local\\BrowserHistoryLauncher.Singleton";
 constexpr UINT kHotkeyId = 1;
 constexpr UINT_PTR kDebounceTimer = 1;
+constexpr UINT_PTR kRecycleTimer = 2;
 constexpr UINT kTrayId = 1;
 constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kShowMessage = WM_APP + 11;
 constexpr UINT kResultsMessage = WM_APP + 12;
 constexpr UINT kExitMessage = WM_APP + 13;
 constexpr UINT kSettingsMessage = WM_APP + 14;
+constexpr UINT kBluetoothResultMessage = WM_APP + 15;
 constexpr ULONG_PTR kQueryCopyData = 0x42484C51;
 constexpr ULONG_PTR kListaryOpenCopyData = 0x42484C4F;
 constexpr wchar_t kProtocolKey[] = L"Software\\Classes\\bhl";
@@ -126,7 +132,7 @@ bool RegisterListaryProtocol(const std::filesystem::path& executable, std::wstri
         error = L"无法创建 bhl:// 当前用户协议，错误码 " + std::to_wstring(status) + L"。";
         return false;
     }
-    bool ok = SetRegistryString(key, nullptr, L"URL:Browser History Launcher", error) &&
+    bool ok = SetRegistryString(key, nullptr, L"URL:Listary Plugin Suite", error) &&
         SetRegistryString(key, L"URL Protocol", L"", error);
     RegCloseKey(key);
     if (!ok) return false;
@@ -146,13 +152,8 @@ class App {
 public:
     App(HINSTANCE instance, AppConfig config, std::filesystem::path configPath)
         : instance_(instance), config_(std::move(config)), configPath_(std::move(configPath)),
-          registry_(config_), adapter_(snapshots_),
-          searchService_(adapter_, snapshots_, [this](SearchResponse&& response) {
-              auto* payload = new SearchResponse(std::move(response));
-              if (!window_ || !PostMessageW(window_, kResultsMessage, 0, reinterpret_cast<LPARAM>(payload))) {
-                  delete payload;
-              }
-          }), listaryServer_(std::make_unique<ListarySuggestionServer>(config_)) {}
+          registry_(config_), adapter_(snapshots_), listaryServer_(std::make_unique<ListarySuggestionServer>(
+              config_, ExecutableDirectory() / L"BrowserHistoryLauncher.exe")) {}
 
     ~App() {
         RemoveTrayIcon();
@@ -173,13 +174,13 @@ public:
         if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
         window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kWindowClass,
-            L"浏览器历史启动器", WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_BORDER,
+            L"Listary 插件集合 · 浏览器历史", WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_BORDER,
             CW_USEDEFAULT, CW_USEDEFAULT, 780, 440, nullptr, nullptr, instance_, this);
         if (!window_) return false;
         if (config_.hotkeyVirtualKey != 0 &&
             !RegisterHotKey(window_, kHotkeyId, config_.hotkeyModifiers, config_.hotkeyVirtualKey)) {
             MessageBoxW(nullptr, L"无法注册全局快捷键，请修改 BrowserHistoryLauncher.ini 后重启。",
-                L"浏览器历史启动器", MB_OK | MB_ICONERROR);
+                L"Listary 插件集合", MB_OK | MB_ICONERROR);
             DestroyWindow(window_);
             window_ = nullptr;
             return false;
@@ -216,13 +217,18 @@ public:
 
     void OpenListaryUri(std::wstring_view uri) {
         std::wstring error;
-        const auto item = listaryServer_->ResolveUri(uri, error);
-        if (!item) {
-            MessageBoxW(window_, error.c_str(), L"无法打开 Listary 历史结果", MB_OK | MB_ICONWARNING);
+        const auto action = listaryServer_->ResolveUri(uri, error);
+        if (!action) {
+            MessageBoxW(window_, error.c_str(), L"无法执行 Listary 结果", MB_OK | MB_ICONWARNING);
             return;
         }
-        const auto* browser = registry_.FindById(item->browserId);
-        if (!browser || !BrowserLauncher::OpenUrl(*browser, item->profileDirectory, item->url, error)) {
+        if (action->kind == ListaryActionKind::BluetoothConnect) {
+            StartBluetoothConnect(action->bluetoothTarget);
+            return;
+        }
+        const auto& item = action->browserResult;
+        const auto* browser = registry_.FindById(item.browserId);
+        if (!browser || !BrowserLauncher::OpenUrl(*browser, item.profileDirectory, item.url, error)) {
             if (error.empty()) error = L"结果来源浏览器配置已不可用。";
             MessageBoxW(window_, error.c_str(), L"无法打开 Listary 历史结果", MB_OK | MB_ICONERROR);
         }
@@ -265,7 +271,10 @@ private:
         case WM_CREATE: return OnCreate() ? 0 : -1;
         case WM_SIZE: Layout(LOWORD(lParam), HIWORD(lParam)); return 0;
         case WM_HOTKEY: if (wParam == kHotkeyId) Show(); return 0;
-        case WM_TIMER: if (wParam == kDebounceTimer) BeginSearch(); return 0;
+        case WM_TIMER:
+            if (wParam == kDebounceTimer) BeginSearch();
+            else if (wParam == kRecycleTimer) RecycleHost();
+            return 0;
         case WM_COMMAND: return OnCommand(LOWORD(wParam), HIWORD(wParam));
         case WM_NOTIFY: return OnNotify(reinterpret_cast<NMHDR*>(lParam));
         case WM_COPYDATA: return OnCopyData(reinterpret_cast<const COPYDATASTRUCT*>(lParam));
@@ -274,14 +283,49 @@ private:
         case kShowMessage: Show(); return 0;
         case kExitMessage: DestroyWindow(window_); return 0;
         case kSettingsMessage: Show(); ShowListarySettings(); return 0;
+        case kBluetoothResultMessage: ApplyBluetoothResult(reinterpret_cast<BluetoothConnectionResult*>(lParam)); return 0;
         case kResultsMessage: ApplyResults(reinterpret_cast<SearchResponse*>(lParam)); return 0;
         case WM_DESTROY:
+            KillTimer(window_, kRecycleTimer);
             if (config_.hotkeyVirtualKey != 0) UnregisterHotKey(window_, kHotkeyId);
             RemoveTrayIcon();
             PostQuitMessage(0);
             return 0;
         }
         return DefWindowProcW(window_, message, wParam, lParam);
+    }
+
+    void StartBluetoothConnect(const BluetoothDeviceTarget& target) {
+        if (target.connected) {
+            MessageBoxW(window_, (target.displayName + L" 已经连接。").c_str(), L"蓝牙设备",
+                MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        bool expected = false;
+        if (!bluetoothBusy_.compare_exchange_strong(expected, true)) {
+            MessageBoxW(window_, L"已有蓝牙连接操作正在进行，请稍后再试。", L"蓝牙设备",
+                MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        if (bluetoothThread_.joinable()) bluetoothThread_.join();
+        const auto executable = ExecutableDirectory() / L"BrowserHistoryLauncher.exe";
+        const auto timeout = config_.bluetooth.connectTimeoutMs;
+        bluetoothThread_ = std::jthread([this, executable, target, timeout] {
+            auto* result = new BluetoothConnectionResult(BluetoothWorker::Connect(executable, target, timeout));
+            if (!window_ || !PostMessageW(window_, kBluetoothResultMessage, 0, reinterpret_cast<LPARAM>(result))) {
+                delete result;
+                bluetoothBusy_.store(false);
+            }
+        });
+    }
+
+    void ApplyBluetoothResult(BluetoothConnectionResult* rawResult) {
+        std::unique_ptr<BluetoothConnectionResult> result(rawResult);
+        bluetoothBusy_.store(false);
+        if (!result) return;
+        if (result->requestAccepted && listaryServer_) listaryServer_->InvalidateBluetoothCache();
+        MessageBoxW(window_, result->message.c_str(), L"蓝牙设备",
+            MB_OK | ((result->confirmedConnected || result->requestAccepted) ? MB_ICONINFORMATION : MB_ICONWARNING));
     }
 
     LRESULT OnCopyData(const COPYDATASTRUCT* data) {
@@ -301,6 +345,15 @@ private:
 
     bool CreateSearchControls() {
         if (edit_ && status_ && list_ && configButton_) return true;
+        if (!searchService_) {
+            searchService_ = std::make_unique<HistorySearchService>(adapter_, snapshots_,
+                [this](SearchResponse&& response) {
+                    auto* payload = new SearchResponse(std::move(response));
+                    if (!window_ || !PostMessageW(window_, kResultsMessage, 0, reinterpret_cast<LPARAM>(payload))) {
+                        delete payload;
+                    }
+                });
+        }
         edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
             0, 0, 0, 0, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEditId)), instance_, nullptr);
         configButton_ = CreateWindowExW(0, L"BUTTON", L"配置 Listary",
@@ -381,8 +434,9 @@ private:
     }
 
     void Show() {
+        KillTimer(window_, kRecycleTimer);
         if (!CreateSearchControls()) {
-            MessageBoxW(window_, L"无法创建搜索控件。", L"浏览器历史启动器", MB_OK | MB_ICONERROR);
+            MessageBoxW(window_, L"无法创建搜索控件。", L"Listary 插件集合", MB_OK | MB_ICONERROR);
             return;
         }
         POINT cursor{};
@@ -406,12 +460,32 @@ private:
         KillTimer(window_, kDebounceTimer);
         ShowWindow(window_, SW_HIDE);
         ++generation_;
-        searchService_.CancelAndCleanup(generation_);
+        if (searchService_) searchService_->CancelAndCleanup(generation_);
         results_.clear();
         results_.shrink_to_fit();
         ListView_DeleteAllItems(list_);
         SetWindowTextW(edit_, L"");
         SetWindowTextW(status_, InputHint().c_str());
+        if (edit_) SetTimer(window_, kRecycleTimer, 1500, nullptr);
+    }
+
+    void RecycleHost() {
+        KillTimer(window_, kRecycleTimer);
+        if (IsWindowVisible(window_) || !edit_) return;
+        const auto executable = ExecutableDirectory() / L"BrowserHistoryLauncher.exe";
+        std::wstring command = BrowserLauncher::QuoteArgument(executable.wstring()) +
+            L" --restart-host-after " + std::to_wstring(GetCurrentProcessId());
+        std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+        mutableCommand.push_back(L'\0');
+        STARTUPINFOW startup{sizeof(startup)};
+        PROCESS_INFORMATION process{};
+        if (!CreateProcessW(executable.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW, nullptr, executable.parent_path().c_str(), &startup, &process)) {
+            return;
+        }
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        DestroyWindow(window_);
     }
 
     void BeginSearch() {
@@ -419,7 +493,7 @@ private:
         const auto parsed = ParseQuery(WindowText(edit_));
         if (parsed.empty) {
             ++generation_;
-            searchService_.CancelAndCleanup(generation_);
+            if (searchService_) searchService_->CancelAndCleanup(generation_);
             results_.clear();
             ListView_DeleteAllItems(list_);
             SetWindowTextW(status_, InputHint().c_str());
@@ -428,7 +502,7 @@ private:
         const auto* browser = registry_.FindByPrefix(parsed.prefix);
         if (!browser) {
             ++generation_;
-            searchService_.CancelAndCleanup(generation_);
+            if (searchService_) searchService_->CancelAndCleanup(generation_);
             results_.clear();
             ListView_DeleteAllItems(list_);
             SetWindowTextW(status_, L"未知或未启用的浏览器前缀");
@@ -437,7 +511,7 @@ private:
         results_.clear();
         ListView_DeleteAllItems(list_);
         SetWindowTextW(status_, (L"正在查询 " + browser->name + L"…").c_str());
-        searchService_.Submit(*browser, parsed.query, config_.maxResults, ++generation_);
+        if (searchService_) searchService_->Submit(*browser, parsed.query, config_.maxResults, ++generation_);
     }
 
     void ApplyResults(SearchResponse* rawResponse) {
@@ -502,7 +576,7 @@ private:
         tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         tray_.uCallbackMessage = kTrayMessage;
         tray_.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP_ICON));
-        wcscpy_s(tray_.szTip, L"浏览器历史启动器");
+        wcscpy_s(tray_.szTip, L"Listary 插件集合");
         trayAdded_ = Shell_NotifyIconW(NIM_ADD, &tray_) != FALSE;
     }
 
@@ -554,9 +628,11 @@ private:
         if (!selections) return;
 
         AppConfig candidate = config_;
+        const BluetoothConfig originalBluetooth = config_.bluetooth;
+        candidate.bluetooth = selections->bluetooth;
         std::vector<BrowserDefinition> originalSettings;
-        originalSettings.reserve(selections->size());
-        for (const auto& selection : *selections) {
+        originalSettings.reserve(selections->browsers.size());
+        for (const auto& selection : selections->browsers) {
             auto browser = std::find_if(candidate.browsers.begin(), candidate.browsers.end(),
                 [&](const BrowserDefinition& item) { return item.id == selection.id; });
             if (browser == candidate.browsers.end()) {
@@ -596,7 +672,8 @@ private:
             std::wstring ignored;
             StartListary(ignored);
         };
-        if (!ConfigStore::SaveBrowserSettings(configPath_, *selections, error)) {
+        if (!ConfigStore::SaveListarySettings(configPath_, selections->browsers,
+                selections->bluetooth, error)) {
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -605,14 +682,14 @@ private:
         AppConfig reloaded = ConfigStore::Load(configPath_, warning);
         if (!ConfigStore::Validate(reloaded, error)) {
             std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalSettings, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
         }
         if (!RegisterListaryProtocol(ExecutableDirectory() / L"BrowserHistoryLauncher.exe", error)) {
             std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalSettings, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -621,17 +698,18 @@ private:
         const auto configured = ListaryConfigurator::Configure(reloaded, preferences, statePath);
         if (!configured.ok) {
             std::wstring ignored;
-            ConfigStore::SaveBrowserSettings(configPath_, originalSettings, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, ignored);
             restartAfterFailure();
             MessageBoxW(window_, configured.message.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
         }
 
         ++generation_;
-        searchService_.CancelAndCleanup(generation_);
+        if (searchService_) searchService_->CancelAndCleanup(generation_);
         listaryServer_.reset();
         config_ = std::move(reloaded);
-        listaryServer_ = std::make_unique<ListarySuggestionServer>(config_);
+        listaryServer_ = std::make_unique<ListarySuggestionServer>(
+            config_, ExecutableDirectory() / L"BrowserHistoryLauncher.exe");
         std::wstring serverWarning;
         const bool serverStarted = listaryServer_->Start(serverWarning);
         SetWindowTextW(status_, InputHint().c_str());
@@ -641,7 +719,8 @@ private:
         const auto enabledCount = std::count_if(config_.browsers.begin(), config_.browsers.end(),
             [](const BrowserDefinition& browser) { return browser.enabled; });
         std::wstring message = L"已一次应用 " + std::to_wstring(enabledCount) +
-            L" 个浏览器，Listary 只重启了一次。备份：\n" + configured.backupPath.wstring();
+            L" 个浏览器和" + (config_.bluetooth.enabled ? L"蓝牙模块" : L"已停用的蓝牙模块") +
+            L"，Listary 只重启了一次。备份：\n" + configured.backupPath.wstring();
         if (!serverStarted) message += L"\n\n建议服务警告：" + serverWarning;
         if (!listaryStarted) message += L"\n\n" + restartWarning;
         MessageBoxW(window_, message.c_str(), L"配置 Listary",
@@ -663,8 +742,10 @@ private:
     BrowserRegistry registry_;
     SnapshotManager snapshots_;
     ChromiumHistoryAdapter adapter_;
-    HistorySearchService searchService_;
+    std::unique_ptr<HistorySearchService> searchService_;
     std::unique_ptr<ListarySuggestionServer> listaryServer_;
+    std::jthread bluetoothThread_;
+    std::atomic<bool> bluetoothBusy_{false};
     std::vector<HistoryResult> results_;
     std::uint64_t generation_ = 0;
 };
@@ -700,9 +781,36 @@ std::optional<std::wstring> ArgumentValue(std::wstring_view argument) {
     }
     return value;
 }
+
+int RestartHostAfter(std::wstring_view processIdText) {
+    const DWORD processId = wcstoul(std::wstring(processIdText).c_str(), nullptr, 10);
+    if (!processId) return 8;
+    HANDLE previous = OpenProcess(SYNCHRONIZE, FALSE, processId);
+    if (!previous) return 8;
+    const DWORD waited = WaitForSingleObject(previous, 15000);
+    CloseHandle(previous);
+    if (waited != WAIT_OBJECT_0) return 8;
+
+    const auto executable = ExecutableDirectory() / L"BrowserHistoryLauncher.exe";
+    std::wstring command = BrowserLauncher::QuoteArgument(executable.wstring());
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+            CREATE_NO_WINDOW, nullptr, executable.parent_path().c_str(), &startup, &process)) {
+        return 8;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return 0;
+}
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    int bluetoothWorkerExit = 0;
+    if (BluetoothWorker::TryRunCommandLine(bluetoothWorkerExit)) return bluetoothWorkerExit;
+    if (const auto previous = ArgumentValue(L"--restart-host-after")) return RestartHostAfter(*previous);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&controls);
@@ -722,7 +830,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             }
             listaryWasRunning = listaryWasRunning || runningThisAttempt;
             if (quiet) return 6;
-            if (MessageBoxW(nullptr, stopError.c_str(), L"Listary 浏览器插件",
+            if (MessageBoxW(nullptr, stopError.c_str(), L"Listary 插件集合",
                     MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY) return 6;
         }
         const auto directory = ExecutableDirectory();
@@ -746,7 +854,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         const bool restarted = !shouldRestart || StartListary(restartError);
         if (!restarted && result.ok) result.message += L"\n\n" + restartError;
         if (!quiet) {
-            MessageBoxW(nullptr, result.message.c_str(), L"Listary 浏览器插件",
+            MessageBoxW(nullptr, result.message.c_str(), L"Listary 插件集合",
                 MB_OK | ((result.ok && restarted) ? MB_ICONINFORMATION : MB_ICONERROR));
         }
         return result.ok ? 0 : (preferences.empty() ? 5 : 7);
@@ -759,7 +867,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         if (!ok || !HasArgument(L"--quiet")) {
             const std::wstring message = ok ?
                 (registering ? L"已为当前用户注册 bhl:// 协议。" : L"已移除当前用户的 bhl:// 协议。") : error;
-            MessageBoxW(nullptr, message.c_str(), L"Browser History Launcher", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+            MessageBoxW(nullptr, message.c_str(), L"Listary Plugin Suite", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
         }
         return ok ? 0 : 4;
     }
@@ -805,7 +913,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     AppConfig config = ConfigStore::Load(configPath, warning);
     std::wstring validationError;
     if (!ConfigStore::Validate(config, validationError)) {
-        MessageBoxW(nullptr, validationError.c_str(), L"浏览器历史启动器配置错误", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, validationError.c_str(), L"Listary 插件集合配置错误", MB_OK | MB_ICONERROR);
         CloseHandle(mutex);
         return 2;
     }

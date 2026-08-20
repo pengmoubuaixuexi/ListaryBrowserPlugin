@@ -23,10 +23,12 @@ constexpr int kKeywordId = 1003;
 constexpr int kIconId = 1004;
 constexpr int kBrowseId = 1005;
 constexpr int kDetectedPathId = 1006;
+constexpr int kBluetoothEnabledId = 1101;
+constexpr int kBluetoothKeywordId = 1102;
 constexpr int kApplyId = IDOK;
 
 constexpr int kClientWidth = 680;
-constexpr int kClientHeight = 510;
+constexpr int kClientHeight = 611;
 
 std::wstring ControlText(HWND control) {
     const int length = GetWindowTextLengthW(control);
@@ -48,7 +50,7 @@ class DialogState {
 public:
     DialogState(HINSTANCE instance, HWND owner, const AppConfig& config,
         std::wstring_view)
-        : instance_(instance), owner_(owner) {
+        : instance_(instance), owner_(owner), bluetooth_(config.bluetooth) {
         for (const auto& browser : config.browsers) {
             const auto executable = BrowserLauncher::FindExecutable(browser);
             if (executable.empty() && !browser.enabled) continue;
@@ -61,7 +63,7 @@ public:
         DeleteFonts();
     }
 
-    std::optional<std::vector<BrowserDefinition>> Run() {
+    std::optional<ListarySettingsResult> Run() {
         WNDCLASSEXW windowClass{sizeof(windowClass)};
         windowClass.lpfnWndProc = WindowProc;
         windowClass.hInstance = instance_;
@@ -83,7 +85,7 @@ public:
         RECT windowRect{0, 0, kClientWidth, kClientHeight};
         AdjustWindowRectExForDpi(&windowRect, style, FALSE, extendedStyle, dpi_);
 
-        window_ = CreateWindowExW(extendedStyle, kClassName, L"配置 Listary 浏览器搜索",
+        window_ = CreateWindowExW(extendedStyle, kClassName, L"配置 Listary 插件",
             style, CW_USEDEFAULT, CW_USEDEFAULT,
             windowRect.right - windowRect.left, windowRect.bottom - windowRect.top,
             owner_, nullptr, instance_, this);
@@ -187,6 +189,7 @@ private:
         if (titleLabel_) SendMessageW(titleLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont_), TRUE);
         if (browserSection_) SendMessageW(browserSection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
         if (listarySection_) SendMessageW(listarySection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
+        if (bluetoothSection_) SendMessageW(bluetoothSection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
         for (HWND control : mutedControls_) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(smallFont_), TRUE);
         }
@@ -213,11 +216,17 @@ private:
         Move(iconLabel_, 28, 371, 106, 26);
         Move(iconEdit_, 150, 365, 390, 31);
         Move(browseButton_, 550, 364, 102, 33);
-        Move(updateHint_, 28, 410, 624, 34);
+        Move(updateHint_, 28, 405, 624, 30);
+        Move(bluetoothSeparator_, 28, 442, 624, 2);
 
-        Move(bottomSeparator_, 28, 453, 624, 2);
-        Move(applyButton_, 440, 466, 112, 32);
-        Move(cancelButton_, 562, 466, 90, 32);
+        Move(bluetoothSection_, 28, 456, 180, 24);
+        Move(bluetoothEnabledCheck_, 150, 482, 502, 28);
+        Move(bluetoothKeywordLabel_, 28, 521, 106, 26);
+        Move(bluetoothKeywordEdit_, 150, 515, 158, 31);
+        Move(bluetoothKeywordHint_, 324, 521, 328, 24);
+        Move(bottomSeparator_, 28, 563, 624, 2);
+        Move(applyButton_, 440, 576, 112, 32);
+        Move(cancelButton_, 562, 576, 90, 32);
     }
 
     void CenterAndShow() const {
@@ -274,9 +283,9 @@ private:
 
     bool CreateControls() {
         CreateFonts();
-        titleLabel_ = AddControl(L"STATIC", L"配置 Listary 浏览器搜索", SS_LEFT);
+        titleLabel_ = AddControl(L"STATIC", L"配置 Listary 插件", SS_LEFT);
         subtitleLabel_ = AddControl(L"STATIC",
-            L"可依次选择并启用多个浏览器；切换时会保留本页修改，最后统一保存并重启一次 Listary。",
+            L"可配置浏览器搜索和蓝牙设备；最后统一保存并只重启一次 Listary。",
             SS_LEFT);
         topSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
@@ -303,17 +312,28 @@ private:
         updateHint_ = AddControl(L"STATIC",
             L"切换下拉框可继续配置其他浏览器，点击“保存并应用全部”后统一同步。这里设置的是 Listary 搜索关键字，不是唤醒快捷键。",
             SS_LEFT);
+        bluetoothSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
+
+        bluetoothSection_ = AddControl(L"STATIC", L"蓝牙设备", SS_LEFT);
+        bluetoothEnabledCheck_ = AddControl(L"BUTTON", L"在 Listary 中启用蓝牙设备列表和连接",
+            BS_AUTOCHECKBOX | WS_TABSTOP, kBluetoothEnabledId);
+        bluetoothKeywordLabel_ = AddControl(L"STATIC", L"搜索关键字", SS_LEFT);
+        bluetoothKeywordEdit_ = AddControl(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP,
+            kBluetoothKeywordId, WS_EX_CLIENTEDGE);
+        bluetoothKeywordHint_ = AddControl(L"STATIC", L"例如 ly；不能与浏览器关键字重复", SS_LEFT);
         bottomSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
         applyButton_ = AddControl(L"BUTTON", L"保存并应用全部", BS_DEFPUSHBUTTON | WS_TABSTOP, kApplyId);
         cancelButton_ = AddControl(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL);
 
         if (!titleLabel_ || !subtitleLabel_ || !browserCombo_ || !enabledCheck_ ||
-            !keywordEdit_ || !iconEdit_ || !pathLabel_ || !applyButton_ || !cancelButton_) {
+            !keywordEdit_ || !iconEdit_ || !pathLabel_ || !bluetoothEnabledCheck_ ||
+            !bluetoothKeywordEdit_ || !applyButton_ || !cancelButton_) {
             return false;
         }
 
-        mutedControls_ = {subtitleLabel_, browserSummary_, pathLabel_, keywordHint_, updateHint_};
+        mutedControls_ = {subtitleLabel_, browserSummary_, pathLabel_, keywordHint_, updateHint_,
+            bluetoothKeywordHint_};
         CreateFonts();
         LayoutControls();
         SendMessageW(browserCombo_, CB_SETMINVISIBLE, 8, 0);
@@ -335,7 +355,6 @@ private:
             SendMessageW(browserCombo_, CB_ADDSTRING, 0,
                 reinterpret_cast<LPARAM>(L"未检测到可配置的浏览器"));
             EnableWindow(browserCombo_, FALSE);
-            EnableWindow(applyButton_, FALSE);
             SetWindowTextW(browserSummary_, L"没有找到历史结构可接入的浏览器。重新打开此页面可再次检测。");
             SetWindowTextW(pathLabel_, L"—");
         } else {
@@ -348,7 +367,10 @@ private:
             SendMessageW(browserCombo_, CB_SETCURSEL, initialIndex, 0);
             SelectBrowser();
         }
-        SetFocus(browserCombo_);
+        Button_SetCheck(bluetoothEnabledCheck_, bluetooth_.enabled ? BST_CHECKED : BST_UNCHECKED);
+        SetWindowTextW(bluetoothKeywordEdit_, bluetooth_.keyword.c_str());
+        UpdateBluetoothControls();
+        SetFocus(browsers_.empty() ? bluetoothEnabledCheck_ : browserCombo_);
         return true;
     }
 
@@ -411,6 +433,23 @@ private:
         browser.iconPath = Trim(ControlText(iconEdit_));
     }
 
+    void UpdateBluetoothControls() const {
+        const BOOL enabled = Button_GetCheck(bluetoothEnabledCheck_) == BST_CHECKED;
+        EnableWindow(bluetoothKeywordEdit_, enabled);
+    }
+
+    bool SaveBluetoothDraft() {
+        bluetooth_.enabled = Button_GetCheck(bluetoothEnabledCheck_) == BST_CHECKED;
+        bluetooth_.keyword = ToLowerInvariant(Trim(ControlText(bluetoothKeywordEdit_)));
+        if (bluetooth_.enabled && !ValidKeyword(bluetooth_.keyword)) {
+            MessageBoxW(window_, L"蓝牙搜索关键字应为 1–16 个字母、数字、- 或 _。",
+                L"配置 Listary", MB_OK | MB_ICONWARNING);
+            SetFocus(bluetoothKeywordEdit_);
+            return false;
+        }
+        return true;
+    }
+
     void UpdateBrowserSummary() const {
         const auto enabledCount = std::count_if(browsers_.begin(), browsers_.end(),
             [](const BrowserDefinition& browser) { return browser.enabled; });
@@ -435,6 +474,7 @@ private:
 
     void Apply() {
         SaveCurrentDraft();
+        if (!SaveBluetoothDraft()) return;
         for (std::size_t index = 0; index < browsers_.size(); ++index) {
             const auto& browser = browsers_[index];
             if (!ValidKeyword(browser.prefix)) {
@@ -465,7 +505,7 @@ private:
                 return;
             }
         }
-        result_ = browsers_;
+        result_ = ListarySettingsResult{browsers_, bluetooth_};
         DestroyWindow(window_);
     }
 
@@ -479,6 +519,7 @@ private:
             UpdateBrowserSummary();
         }
         else if (id == kBrowseId && notification == BN_CLICKED) BrowseIcon();
+        else if (id == kBluetoothEnabledId && notification == BN_CLICKED) UpdateBluetoothControls();
         else if (id == kApplyId && notification == BN_CLICKED) Apply();
         else if (id == IDCANCEL && notification == BN_CLICKED) DestroyWindow(window_);
         return 0;
@@ -512,6 +553,12 @@ private:
     HWND iconEdit_{};
     HWND browseButton_{};
     HWND updateHint_{};
+    HWND bluetoothSeparator_{};
+    HWND bluetoothSection_{};
+    HWND bluetoothEnabledCheck_{};
+    HWND bluetoothKeywordLabel_{};
+    HWND bluetoothKeywordEdit_{};
+    HWND bluetoothKeywordHint_{};
     HWND bottomSeparator_{};
     HWND applyButton_{};
     HWND cancelButton_{};
@@ -520,13 +567,14 @@ private:
     std::vector<HWND> mutedControls_;
     std::vector<BrowserDefinition> browsers_;
     std::vector<std::filesystem::path> executables_;
+    BluetoothConfig bluetooth_;
     std::size_t selectedIndex_ = static_cast<std::size_t>(-1);
     std::size_t detectedCount_ = 0;
-    std::optional<std::vector<BrowserDefinition>> result_;
+    std::optional<ListarySettingsResult> result_;
 };
 }
 
-std::optional<std::vector<BrowserDefinition>> ListarySettingsDialog::Show(HINSTANCE instance, HWND owner,
+std::optional<ListarySettingsResult> ListarySettingsDialog::Show(HINSTANCE instance, HWND owner,
     const AppConfig& config, std::wstring_view discoverySummary) {
     DialogState dialog(instance, owner, config, discoverySummary);
     return dialog.Run();

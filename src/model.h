@@ -29,6 +29,49 @@ struct BrowserProfile {
     std::filesystem::path historyPath;
 };
 
+enum class BluetoothTransport {
+    Classic,
+    LowEnergy,
+    DualMode
+};
+
+struct BluetoothDeviceTarget {
+    std::wstring stableKey;
+    std::wstring displayName;
+    std::wstring classicDeviceId;
+    std::wstring lowEnergyDeviceId;
+    BluetoothTransport transport = BluetoothTransport::Classic;
+    bool connected = false;
+    bool present = false;
+};
+
+struct BluetoothConfig {
+    bool enabled = true;
+    std::wstring keyword = L"ly";
+    UINT cacheSeconds = 8;
+    UINT connectTimeoutMs = 20000;
+};
+
+struct BluetoothEnumerationResult {
+    std::vector<BluetoothDeviceTarget> devices;
+    std::wstring error;
+    std::uint64_t elapsedMilliseconds = 0;
+    std::uint64_t workerPrivateWorkingSetBytes = 0;
+    std::uint64_t workerPrivateBytes = 0;
+    unsigned workerThreads = 0;
+    unsigned workerHandles = 0;
+};
+
+struct BluetoothConnectionResult {
+    bool attempted = false;
+    bool requestAccepted = false;
+    bool confirmedConnected = false;
+    std::wstring message;
+    std::uint64_t elapsedMilliseconds = 0;
+    std::uint64_t workerPrivateWorkingSetBytes = 0;
+    std::uint64_t workerPrivateBytes = 0;
+};
+
 struct HistoryResult {
     std::wstring title;
     std::wstring url;
@@ -47,7 +90,19 @@ struct AppConfig {
     UINT hotkeyVirtualKey = VK_SPACE;
     std::size_t maxResults = 20;
     UINT debounceMs = 90;
+    BluetoothConfig bluetooth;
     std::vector<BrowserDefinition> browsers;
+};
+
+enum class ListaryActionKind {
+    BrowserOpen,
+    BluetoothConnect
+};
+
+struct ListaryAction {
+    ListaryActionKind kind = ListaryActionKind::BrowserOpen;
+    HistoryResult browserResult;
+    BluetoothDeviceTarget bluetoothTarget;
 };
 
 struct SearchResponse {

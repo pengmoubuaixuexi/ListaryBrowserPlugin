@@ -166,6 +166,12 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
     config.debounceMs = std::clamp<UINT>(std::wcstoul(
         ReadValue(iniPath, L"app", L"DebounceMs", L"90").c_str(), nullptr, 10), 60, 120);
     ParseHotkey(ReadValue(iniPath, L"app", L"Hotkey", L"Alt+Shift+Space"), config, warning);
+    config.bluetooth.enabled = ReadBool(iniPath, L"bluetooth", L"Enabled", true);
+    config.bluetooth.keyword = ToLowerInvariant(ReadValue(iniPath, L"bluetooth", L"Keyword", L"ly"));
+    config.bluetooth.cacheSeconds = std::clamp<UINT>(std::wcstoul(
+        ReadValue(iniPath, L"bluetooth", L"CacheSeconds", L"8").c_str(), nullptr, 10), 1, 30);
+    config.bluetooth.connectTimeoutMs = std::clamp<UINT>(std::wcstoul(
+        ReadValue(iniPath, L"bluetooth", L"ConnectTimeoutMs", L"20000").c_str(), nullptr, 10), 1000, 30000);
 
     const auto sections = EnumerateBrowserSections(iniPath);
     if (sections.empty()) {
@@ -256,8 +262,63 @@ bool ConfigStore::SaveBrowserSettings(const std::filesystem::path& iniPath,
     return true;
 }
 
+bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
+    const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
+    std::wstring& error) {
+    const auto temporaryPath = std::filesystem::path(iniPath.wstring() + L".bhl-tmp");
+    std::error_code fileError;
+    std::filesystem::remove(temporaryPath, fileError);
+    fileError.clear();
+    if (std::filesystem::exists(iniPath, fileError)) {
+        std::filesystem::copy_file(iniPath, temporaryPath,
+            std::filesystem::copy_options::overwrite_existing, fileError);
+        if (fileError) {
+            error = L"无法创建配置文件临时副本：" + temporaryPath.wstring() + L"。";
+            return false;
+        }
+    }
+    for (const auto& browser : browsers) {
+        if (!SaveBrowserSettings(temporaryPath, browser, error)) {
+            std::filesystem::remove(temporaryPath, fileError);
+            return false;
+        }
+    }
+    const auto writeBluetooth = [&](const wchar_t* key, const std::wstring& value) {
+        return WritePrivateProfileStringW(L"bluetooth", key, value.c_str(), temporaryPath.c_str()) != FALSE;
+    };
+    if (!writeBluetooth(L"Enabled", bluetooth.enabled ? L"true" : L"false") ||
+        !writeBluetooth(L"Keyword", bluetooth.keyword) ||
+        !writeBluetooth(L"CacheSeconds", std::to_wstring(bluetooth.cacheSeconds)) ||
+        !WritePrivateProfileStringW(L"bluetooth", L"ConnectTimeoutMs", nullptr, temporaryPath.c_str())) {
+        error = L"无法写入蓝牙配置：" + temporaryPath.wstring() + L"。";
+        std::filesystem::remove(temporaryPath, fileError);
+        return false;
+    }
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, temporaryPath.c_str());
+    if (!MoveFileExW(temporaryPath.c_str(), iniPath.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        error = L"无法替换配置文件：" + FormatWindowsError(GetLastError());
+        std::filesystem::remove(temporaryPath, fileError);
+        return false;
+    }
+    return true;
+}
+
 bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {
     std::set<std::wstring> prefixes;
+    if (config.bluetooth.cacheSeconds < 1 || config.bluetooth.cacheSeconds > 30 ||
+            config.bluetooth.connectTimeoutMs < 1000 || config.bluetooth.connectTimeoutMs > 30000) {
+        error = L"蓝牙缓存或连接等待时间超出允许范围。";
+        return false;
+    }
+    if (config.bluetooth.enabled) {
+        if (config.bluetooth.keyword.empty() ||
+            config.bluetooth.keyword.find_first_of(L" \t\r\n") != std::wstring::npos) {
+            error = L"蓝牙关键字不能为空或包含空白字符。";
+            return false;
+        }
+        prefixes.insert(ToLowerInvariant(config.bluetooth.keyword));
+    }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;
         if (browser.id.empty() || browser.name.empty() || browser.prefix.empty()) {
@@ -274,7 +335,7 @@ bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {
         }
         const auto normalized = ToLowerInvariant(browser.prefix);
         if (!prefixes.insert(normalized).second) {
-            error = L"浏览器前缀冲突：" + browser.prefix;
+            error = L"Listary 关键字冲突：" + browser.prefix;
             return false;
         }
         if (browser.executableCandidates.empty() || browser.userDataCandidates.empty()) {

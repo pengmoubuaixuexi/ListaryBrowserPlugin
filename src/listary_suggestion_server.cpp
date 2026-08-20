@@ -3,6 +3,7 @@
 
 #include "listary_suggestion_server.h"
 
+#include "bluetooth_worker.h"
 #include "browser_registry.h"
 #include "chromium_history_adapter.h"
 #include "history_search_service.h"
@@ -145,6 +146,18 @@ std::string SuggestionJson(std::wstring_view query, const SearchResponse& respon
     return json;
 }
 
+std::string SuggestionJson(std::wstring_view query, const std::vector<std::wstring>& suggestions) {
+    std::string json = "[" + JsonString(query) + ",[";
+    bool first = true;
+    for (const auto& suggestion : suggestions) {
+        if (!first) json.push_back(',');
+        first = false;
+        json += JsonString(suggestion);
+    }
+    json += "]]";
+    return json;
+}
+
 void SendAll(SOCKET socket, std::string_view data) {
     while (!data.empty()) {
         const int sent = send(socket, data.data(), static_cast<int>(std::min<std::size_t>(data.size(), INT_MAX)), 0);
@@ -165,15 +178,8 @@ void SendResponse(SOCKET socket, int status, std::string_view reason,
 }
 
 struct ListarySuggestionServer::Impl {
-    explicit Impl(const AppConfig& sourceConfig)
-        : config(sourceConfig), registry(config), adapter(snapshots),
-          searchService(adapter, snapshots, [this](SearchResponse&& value) {
-              {
-                  std::lock_guard lock(responseMutex);
-                  response = std::move(value);
-              }
-              responseReady.notify_one();
-          }) {}
+    explicit Impl(const AppConfig& sourceConfig, std::filesystem::path sourceWorkerExecutable)
+        : config(sourceConfig), workerExecutable(std::move(sourceWorkerExecutable)), registry(config), adapter(snapshots) {}
 
     ~Impl() {
         stopping.store(true, std::memory_order_release);
@@ -217,7 +223,7 @@ struct ListarySuggestionServer::Impl {
         return true;
     }
 
-    std::optional<HistoryResult> ResolveUri(std::wstring_view uri, std::wstring& error) const {
+    std::optional<ListaryAction> ResolveUri(std::wstring_view uri, std::wstring& error) const {
         const auto target = EncodeUtf8(uri);
         if (!StartsWithInsensitive(uri, L"bhl:") || uri.find(L'?') == std::wstring_view::npos) {
             error = L"Listary 返回了无法识别的打开地址。";
@@ -226,15 +232,19 @@ struct ListarySuggestionServer::Impl {
         const auto prefix = QueryParameter(target, "prefix");
         const auto selection = QueryParameter(target, "selection");
         if (!prefix || !selection) {
-            error = L"Listary 打开地址缺少浏览器或结果参数。";
+            error = L"Listary 打开地址缺少功能前缀或结果参数。";
             return std::nullopt;
         }
         const auto key = MappingKey(*prefix, *selection);
         std::lock_guard lock(mappingMutex);
         const auto found = mappings.find(key);
         if (found == mappings.end()) {
-            error = L"没有找到可打开的浏览历史结果。请先确认 Listary 下拉列表中已经出现历史记录，"
-                L"再选择其中一条；历史库为空时不能直接回车。";
+            error = L"没有找到对应的 Listary 结果。请重新输入关键字，等待下拉结果出现后再选择。";
+            return std::nullopt;
+        }
+        if (found->second.expiresAt != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() >= found->second.expiresAt) {
+            error = L"蓝牙设备结果已经过期。请重新输入关键字并选择最新状态。";
             return std::nullopt;
         }
         return found->second.result;
@@ -290,6 +300,11 @@ struct ListarySuggestionServer::Impl {
             SendResponse(client, 400, "Bad Request", "application/json; charset=utf-8", "[\"\",[]]");
             return;
         }
+        if (config.bluetooth.enabled &&
+            ToLowerInvariant(*prefix) == ToLowerInvariant(config.bluetooth.keyword)) {
+            HandleBluetoothSuggestion(client, *prefix, *query);
+            return;
+        }
         const auto* browser = registry.FindByPrefix(*prefix);
         if (!browser) {
             const auto body = SuggestionJson(*query, SearchResponse{});
@@ -298,11 +313,21 @@ struct ListarySuggestionServer::Impl {
         }
 
         const auto requestedGeneration = ++generation;
+        if (!searchService) {
+            searchService = std::make_unique<HistorySearchService>(adapter, snapshots,
+                [this](SearchResponse&& value) {
+                    {
+                        std::lock_guard lock(responseMutex);
+                        response = std::move(value);
+                    }
+                    responseReady.notify_one();
+                });
+        }
         {
             std::lock_guard lock(responseMutex);
             response.reset();
         }
-        searchService.Submit(*browser, *query, config.maxResults, requestedGeneration);
+        searchService->Submit(*browser, *query, config.maxResults, requestedGeneration);
         std::unique_lock lock(responseMutex);
         const bool ready = responseReady.wait_for(lock, std::chrono::seconds(5), [&] {
             return stopping.load(std::memory_order_acquire) ||
@@ -310,7 +335,7 @@ struct ListarySuggestionServer::Impl {
         });
         if (!ready || !response) {
             lock.unlock();
-            searchService.CancelAndCleanup(++generation);
+            searchService->CancelAndCleanup(++generation);
             SendResponse(client, 504, "Gateway Timeout", "application/json; charset=utf-8", "[\"\",[]]");
             return;
         }
@@ -320,6 +345,49 @@ struct ListarySuggestionServer::Impl {
         CacheMappings(*browser, *prefix, *query, completed);
         const auto body = SuggestionJson(*query, completed);
         SendResponse(client, 200, "OK", "application/json; charset=utf-8", body);
+    }
+
+    void HandleBluetoothSuggestion(SOCKET client, std::wstring_view prefix, std::wstring_view query) {
+        const auto now = std::chrono::steady_clock::now();
+        if (bluetoothCacheInvalidated.exchange(false) || bluetoothCache.empty() || now >= bluetoothCacheExpires) {
+            if (workerExecutable.empty()) {
+                SendResponse(client, 503, "Service Unavailable", "application/json; charset=utf-8", "[\"\",[]]");
+                return;
+            }
+            auto enumeration = BluetoothWorker::Enumerate(workerExecutable, 5000);
+            if (!enumeration.error.empty()) {
+                SendResponse(client, 503, "Service Unavailable", "application/json; charset=utf-8", "[\"\",[]]");
+                return;
+            }
+            bluetoothCache = std::move(enumeration.devices);
+            bluetoothCacheExpires = now + std::chrono::seconds(config.bluetooth.cacheSeconds);
+        }
+
+        const auto normalizedQuery = ToLowerInvariant(Trim(query));
+        std::vector<BluetoothDeviceTarget> matches;
+        for (const auto& device : bluetoothCache) {
+            if (normalizedQuery.empty() || ToLowerInvariant(device.displayName).find(normalizedQuery) != std::wstring::npos) {
+                matches.push_back(device);
+            }
+        }
+        std::sort(matches.begin(), matches.end(), [&](const auto& left, const auto& right) {
+            if (left.connected != right.connected) return left.connected > right.connected;
+            const bool leftPrefix = StartsWithInsensitive(left.displayName, normalizedQuery);
+            const bool rightPrefix = StartsWithInsensitive(right.displayName, normalizedQuery);
+            if (leftPrefix != rightPrefix) return leftPrefix > rightPrefix;
+            return CompareStringOrdinal(left.displayName.c_str(), -1, right.displayName.c_str(), -1, TRUE) == CSTR_LESS_THAN;
+        });
+        CacheBluetoothMappings(prefix, query, matches);
+        std::vector<std::wstring> suggestions;
+        std::map<std::wstring, unsigned> duplicateCounts;
+        for (const auto& device : matches) {
+            const auto normalizedName = ToLowerInvariant(device.displayName);
+            const unsigned duplicate = ++duplicateCounts[normalizedName];
+            std::wstring name = device.displayName;
+            if (duplicate > 1) name += L" (" + std::to_wstring(duplicate) + L")";
+            suggestions.push_back(name + (device.connected ? L"  —  已连接" : L"  —  未连接"));
+        }
+        SendResponse(client, 200, "OK", "application/json; charset=utf-8", SuggestionJson(query, suggestions));
     }
 
     static std::wstring MappingKey(std::wstring_view prefix, std::wstring_view selection) {
@@ -332,24 +400,58 @@ struct ListarySuggestionServer::Impl {
         std::lock_guard lock(mappingMutex);
         for (const auto& result : completed.results) {
             const auto display = DisplayText(result);
-            if (!display.empty()) StoreMapping(MappingKey(normalizedPrefix, display), result);
+            if (!display.empty()) {
+                ListaryAction action;
+                action.kind = ListaryActionKind::BrowserOpen;
+                action.browserResult = result;
+                StoreMapping(MappingKey(normalizedPrefix, display), std::move(action));
+            }
         }
         // Listary always renders the raw query as its first selectable row. It
         // must mean "search/open this input", independently of the first
         // history suggestion shown below it.
         if (auto fallback = MakeSearchFallback(browser, query)) {
-            StoreMapping(MappingKey(normalizedPrefix, query), *fallback);
+            ListaryAction action;
+            action.kind = ListaryActionKind::BrowserOpen;
+            action.browserResult = *fallback;
+            StoreMapping(MappingKey(normalizedPrefix, query), std::move(action));
+        }
+    }
+
+    void CacheBluetoothMappings(std::wstring_view prefix, std::wstring_view query,
+        const std::vector<BluetoothDeviceTarget>& devices) {
+        std::lock_guard lock(mappingMutex);
+        std::map<std::wstring, unsigned> duplicateCounts;
+        for (const auto& device : devices) {
+            const unsigned duplicate = ++duplicateCounts[ToLowerInvariant(device.displayName)];
+            std::wstring name = device.displayName;
+            if (duplicate > 1) name += L" (" + std::to_wstring(duplicate) + L")";
+            const std::wstring display = name + (device.connected ? L"  —  已连接" : L"  —  未连接");
+            ListaryAction action;
+            action.kind = ListaryActionKind::BluetoothConnect;
+            action.bluetoothTarget = device;
+            StoreMapping(MappingKey(prefix, display), std::move(action), std::chrono::seconds(60));
+        }
+        if (!devices.empty()) {
+            ListaryAction action;
+            action.kind = ListaryActionKind::BluetoothConnect;
+            action.bluetoothTarget = devices.front();
+            StoreMapping(MappingKey(prefix, query), std::move(action), std::chrono::seconds(60));
         }
     }
 
     struct CachedMapping {
-        HistoryResult result;
+        ListaryAction result;
         std::uint64_t sequence = 0;
+        std::chrono::steady_clock::time_point expiresAt{};
     };
 
-    void StoreMapping(std::wstring key, const HistoryResult& result) {
+    void StoreMapping(std::wstring key, ListaryAction result,
+        std::chrono::steady_clock::duration ttl = std::chrono::steady_clock::duration::zero()) {
         const auto sequence = ++mappingSequence;
-        mappings.insert_or_assign(key, CachedMapping{result, sequence});
+        const auto expiresAt = ttl == std::chrono::steady_clock::duration::zero() ?
+            std::chrono::steady_clock::time_point{} : std::chrono::steady_clock::now() + ttl;
+        mappings.insert_or_assign(key, CachedMapping{std::move(result), sequence, expiresAt});
         mappingOrder.emplace_back(std::move(key), sequence);
         while (mappingOrder.size() > kMaxCachedMappings) {
             auto oldest = std::move(mappingOrder.front());
@@ -360,6 +462,9 @@ struct ListarySuggestionServer::Impl {
     }
 
     AppConfig config;
+    std::filesystem::path workerExecutable;
+    std::vector<BluetoothDeviceTarget> bluetoothCache;
+    std::chrono::steady_clock::time_point bluetoothCacheExpires{};
     BrowserRegistry registry;
     SnapshotManager snapshots;
     ChromiumHistoryAdapter adapter;
@@ -371,15 +476,17 @@ struct ListarySuggestionServer::Impl {
     std::deque<std::pair<std::wstring, std::uint64_t>> mappingOrder;
     std::uint64_t mappingSequence = 0;
     std::atomic<bool> stopping{false};
+    std::atomic<bool> bluetoothCacheInvalidated{false};
     SOCKET listenSocket = INVALID_SOCKET;
     std::thread serverThread;
     bool winsockStarted = false;
     std::uint64_t generation = 0;
-    HistorySearchService searchService;
+    std::unique_ptr<HistorySearchService> searchService;
 };
 
-ListarySuggestionServer::ListarySuggestionServer(const AppConfig& config)
-    : impl_(std::make_unique<Impl>(config)) {}
+ListarySuggestionServer::ListarySuggestionServer(const AppConfig& config,
+    std::filesystem::path workerExecutable)
+    : impl_(std::make_unique<Impl>(config, std::move(workerExecutable))) {}
 
 ListarySuggestionServer::~ListarySuggestionServer() = default;
 
@@ -387,13 +494,23 @@ bool ListarySuggestionServer::Start(std::wstring& error) {
     return impl_->Start(error);
 }
 
-std::optional<HistoryResult> ListarySuggestionServer::ResolveUri(std::wstring_view uri, std::wstring& error) const {
+std::optional<ListaryAction> ListarySuggestionServer::ResolveUri(std::wstring_view uri, std::wstring& error) const {
     return impl_->ResolveUri(uri, error);
+}
+
+void ListarySuggestionServer::InvalidateBluetoothCache() {
+    impl_->bluetoothCacheInvalidated.store(true);
 }
 
 #ifdef BHL_TESTING
 void ListarySuggestionServer::CacheMappingsForTest(const BrowserDefinition& browser,
     std::wstring_view prefix, std::wstring_view query, const SearchResponse& response) {
     impl_->CacheMappings(browser, prefix, query, response);
+}
+
+
+void ListarySuggestionServer::CacheBluetoothMappingsForTest(std::wstring_view prefix,
+    std::wstring_view query, const std::vector<BluetoothDeviceTarget>& devices) {
+    impl_->CacheBluetoothMappings(prefix, query, devices);
 }
 #endif

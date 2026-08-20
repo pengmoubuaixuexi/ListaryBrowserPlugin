@@ -1,10 +1,12 @@
-# Browser History Launcher
+# Listary Plugin Suite
 
 [![Latest release](https://img.shields.io/github/v/release/pengmoubuaixuexi/ListaryBrowserPlugin)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin)
 
-一个 Windows 10/11 x64 原生浏览器历史启动器。程序常驻托盘，按 `Ctrl+Shift+Space` 呼出，输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，并始终使用结果来源浏览器和配置文件打开网址。
+一个 Windows 10/11 x64 原生 Listary 插件集合。程序只常驻一个轻量宿主：输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，输入 `ly` 按需列出已配对蓝牙设备。浏览器结果始终由来源浏览器和 Profile 打开；蓝牙没有独立页面，也不会后台扫描。
+
+当前稳定版本为 v2.0.0，图形安装器和便携 ZIP 均包含浏览器历史与 `ly` 蓝牙模块。v1.0.0 仅包含浏览器历史功能。
 
 当前实现严格限于 Chromium 浏览历史，不搜索文件、应用、书签、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。
 
@@ -14,7 +16,7 @@
 
 Listary 可以快速找到文件和应用，但浏览器内部访问过的页面通常还要切回浏览器搜索。本工具把 Chrome、Edge 及其他兼容 Chromium 浏览器的本地历史记录直接放进 Listary 下拉列表：输入关键字即可筛选，回车后仍由记录所属浏览器和 Profile 打开。
 
-- 原生 C++20 + Win32，Listary-only 空闲私有工作集实测约 2.24 MiB。
+- 原生 C++20 + Win32，一个启动项、一个托盘、一个本地建议服务；蓝牙只启动同一 EXE 的短生命周期 worker。
 - 历史记录只在本机按需读取，不上传网址和查询词，不建立后台完整索引。
 - 自动发现 Windows 已注册且历史库结构兼容的 Chromium 浏览器。
 - 可一次配置多个浏览器、关键字和 ICO 图标，只重启一次 Listary。
@@ -22,12 +24,24 @@ Listary 可以快速找到文件和应用，但浏览器内部访问过的页面
 
 ## 快速开始
 
-1. 从项目 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)下载 `ListaryBrowserPlugin-Setup-x64.exe`。
-2. 完成当前用户安装；默认可选择开机启动，不需要管理员权限。
-3. 在自动打开的“配置 Listary”页面选择浏览器、启用状态、关键字和图标。
-4. 保存后呼出 Listary，例如输入 `g github`，直接在下拉列表选择历史页面。
+### 安装版 v2.0.0
 
-安装器未经 Authenticode 商业证书签名，Windows 可能显示“未知发布者”。请只从本项目的 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases)下载，并可用同一版本提供的 `SHA256SUMS.txt` 核对文件。
+1. 从项目 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest) 下载 `ListaryBrowserPlugin-Setup-x64.exe`。
+2. 完成当前用户安装；默认可选择开机启动，不需要管理员权限。
+3. 安装结束后，在自动打开的“配置 Listary”页面设置浏览器和蓝牙关键字。
+4. 保存后呼出 Listary：输入 `g`/`e` 搜索浏览器历史，输入 `ly` 列出已配对蓝牙设备。
+
+安装器未经 Authenticode 商业证书签名，Windows 可能显示“未知发布者”。请只从本项目 Releases 页面下载，并用同一版本的 `SHA256SUMS.txt` 核对文件。
+
+### 源码构建
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
+.\build\Release\BrowserHistoryLauncher.exe
+```
+
+从托盘或浏览器历史窗口打开“配置 Listary”，保存后会同时写入已启用浏览器和 `ly` 蓝牙项。
 
 ## 运行
 
@@ -41,7 +55,7 @@ ListaryBrowserPlugin-Setup-x64.exe
 
 1. 使用 `build\Release\BrowserHistoryLauncher.exe`，并让 `BrowserHistoryLauncher.ini` 与 EXE 位于同一目录。
 2. 启动后程序隐藏在托盘中。
-3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录。
+3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录；蓝牙直接在 Listary 中输入 `ly` 或 `ly air`。
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
@@ -64,8 +78,8 @@ Listary 集成依赖本工具进程保持运行；可将 EXE 快捷方式放入�
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
 Release 使用 C++20、静态 MSVC CRT 和 Windows SDK 自带 `winsqlite3.lib`。程序只依赖 Windows 系统 DLL，不捆绑第三方运行时。资源实测及当前未达标项见 `docs\RESOURCE_REPORT.md`。
@@ -92,6 +106,12 @@ INI 的 `[app]` 支持：
 - `Hotkey=none`：禁用本工具自己的全局快捷键，适合只通过 Listary 调用。
 - `MaxResults`：1–100，默认 20。
 - `DebounceMs`：限制为 60–120，默认 90。
+
+INI 的 `[bluetooth]` 支持：
+
+- `Enabled`：是否把蓝牙模块写入 Listary。
+- `Keyword`：默认 `ly`，必须与浏览器关键字唯一。
+- `CacheSeconds`：设备枚举短缓存，限制为 1–30 秒，默认 8。
 
 每个 `[browser.<id>]` 描述一个 Chromium 浏览器：
 
@@ -123,7 +143,7 @@ INI 的 `[app]` 支持：
 
 ## English
 
-Browser History Launcher is an unofficial, privacy-focused Listary extension for Windows 10/11 x64. It shows local Chrome, Edge, and compatible Chromium browser history directly in Listary's dropdown and always opens a selected item with its source browser and profile.
+Listary Plugin Suite is an unofficial, privacy-focused Listary extension for Windows 10/11 x64. It shows local Chromium browser history and paired Bluetooth devices directly in Listary's dropdown. Bluetooth enumeration and audio-device connection requests run only on demand in short-lived worker processes; there is no background device scan or separate Bluetooth UI.
 
 The runtime is native C++20/Win32, does not upload browsing data, does not build a background full-history index, and uses about 2.24 MiB private working set in the measured Listary-only idle scenario. Listary 6.3.5.94 was verified locally, and a real user has confirmed compatibility with Listary V7.
 

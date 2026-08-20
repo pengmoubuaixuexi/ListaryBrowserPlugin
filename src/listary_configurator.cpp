@@ -104,7 +104,13 @@ bool IsOurInsertion(const JsonValue& insertion) {
     const JsonValue* item = ItemObject(insertion);
     if (!item) return false;
     return StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://open?") ||
+        StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://bluetooth?") ||
         StartsWithInsensitive(StringProperty(*item, L"SuggestionUrl"), L"http://127.0.0.1:32119/suggest?");
+}
+
+bool IsOurBrowserInsertion(const JsonValue& insertion) {
+    const JsonValue* item = ItemObject(insertion);
+    return item && StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://open?");
 }
 
 std::wstring UrlEncode(std::wstring_view value) {
@@ -140,6 +146,31 @@ JsonValue MakeInsertion(const BrowserDefinition& browser) {
     item.Set(L"Keyword", JsonValue::String(browser.prefix));
     item.Set(L"Url", JsonValue::String(L"bhl://open?prefix=" + encodedPrefix + L"&selection={query}"));
     item.Set(L"Title", JsonValue::String(std::move(title)));
+    item.Set(L"Icon", std::move(icon));
+    item.Set(L"SuggestionProvider", JsonValue::String(L"Custom"));
+    item.Set(L"SuggestionUrl", JsonValue::String(
+        L"http://127.0.0.1:32119/suggest?prefix=" + encodedPrefix + L"&q={query}"));
+
+    JsonValue insertion = JsonValue::ObjectValue();
+    insertion.Set(L"Index", JsonValue::Number(L"-1"));
+    insertion.Set(L"Info", JsonValue());
+    insertion.Set(L"Item", std::move(item));
+    return insertion;
+}
+
+JsonValue MakeBluetoothInsertion(const BluetoothConfig& bluetooth) {
+    const std::wstring encodedPrefix = UrlEncode(bluetooth.keyword);
+    wchar_t modulePath[32768]{};
+    GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    JsonValue icon = JsonValue::ObjectValue();
+    icon.Set(L"Path", JsonValue::String(modulePath));
+    icon.Set(L"TypeName", JsonValue::String(L"Path"));
+
+    JsonValue item = JsonValue::ObjectValue();
+    item.Set(L"Keyword", JsonValue::String(bluetooth.keyword));
+    item.Set(L"Url", JsonValue::String(
+        L"bhl://bluetooth?prefix=" + encodedPrefix + L"&selection={query}"));
+    item.Set(L"Title", JsonValue::String(L"蓝牙设备"));
     item.Set(L"Icon", std::move(icon));
     item.Set(L"SuggestionProvider", JsonValue::String(L"Custom"));
     item.Set(L"SuggestionUrl", JsonValue::String(
@@ -196,6 +227,12 @@ void WritePerBrowserMode(const std::filesystem::path& statePath) {
 
 bool IsOurInsertionForPrefix(const JsonValue& insertion, std::wstring_view prefix) {
     if (!IsOurInsertion(insertion)) return false;
+    const JsonValue* item = ItemObject(insertion);
+    return item && ToLowerInvariant(StringProperty(*item, L"Keyword")) == ToLowerInvariant(prefix);
+}
+
+bool IsOurBrowserInsertionForPrefix(const JsonValue& insertion, std::wstring_view prefix) {
+    if (!IsOurBrowserInsertion(insertion)) return false;
     const JsonValue* item = ItemObject(insertion);
     return item && ToLowerInvariant(StringProperty(*item, L"Keyword")) == ToLowerInvariant(prefix);
 }
@@ -352,6 +389,16 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
     auto& insertionArray = insertions->array();
     std::erase_if(insertionArray, IsOurInsertion);
 
+    if (config.bluetooth.enabled) {
+        for (const auto& existing : insertionArray) {
+            const JsonValue* item = ItemObject(existing);
+            if (item && ToLowerInvariant(StringProperty(*item, L"Keyword")) ==
+                    ToLowerInvariant(config.bluetooth.keyword)) {
+                result.message = L"Listary 关键字已被其他自定义项目占用：" + config.bluetooth.keyword;
+                return result;
+            }
+        }
+    }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;
         for (const auto& existing : insertionArray) {
@@ -364,6 +411,7 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
     }
 
     bool needsGoogleDisabled = false;
+    if (config.bluetooth.enabled) insertionArray.push_back(MakeBluetoothInsertion(config.bluetooth));
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;
         insertionArray.push_back(MakeInsertion(browser));
@@ -415,11 +463,11 @@ ListaryConfigurationResult ListaryConfigurator::ConfigureBrowser(const BrowserDe
     if (!ReadPerBrowserMode(statePath)) {
         // Migrate configurations produced by older versions, which wrote every
         // Enabled browser even though the dialog only showed one selection.
-        std::erase_if(insertionArray, IsOurInsertion);
+        std::erase_if(insertionArray, IsOurBrowserInsertion);
     } else {
         std::erase_if(insertionArray, [&](const JsonValue& insertion) {
-            return IsOurInsertionForPrefix(insertion, previousPrefix) ||
-                IsOurInsertionForPrefix(insertion, browser.prefix);
+            return IsOurBrowserInsertionForPrefix(insertion, previousPrefix) ||
+                IsOurBrowserInsertionForPrefix(insertion, browser.prefix);
         });
     }
 

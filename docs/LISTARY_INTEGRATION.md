@@ -2,6 +2,8 @@
 
 本机 Listary 6.3.5.94 可以把自定义网页搜索提示显示为 Listary 自己的下拉结果。本工具仅在 `127.0.0.1:32119` 提供按需建议接口；它不建立后台索引，也不持续扫描浏览器数据库。
 
+v2 同一建议宿主还提供 `ly` 蓝牙设备结果。蓝牙设备只在 Listary 请求到达时通过短生命周期 worker 枚举，空闲时不扫描、不轮询，也没有独立蓝牙页面。
+
 选择结果时使用当前用户的 `bhl://` 协议把结果交回本工具，再由结果来源浏览器及 Profile 打开。这样不会经过 Windows 默认浏览器。
 
 ## 图形安装器（推荐）
@@ -71,6 +73,27 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1 -Remov
 - 启用：勾选
 
 输入 `e microsoft` 后，第一行 `microsoft` 按 Enter 会交给 Edge 当前 Profile 的地址栏搜索；选择下面的历史结果则打开该结果自己的 URL。
+
+## 蓝牙设备
+
+自动配置会新增：
+
+- 关键字：`ly`
+- 标题：`蓝牙设备`
+- Url：`bhl://bluetooth?prefix=ly&selection={query}`
+- 搜索提示：`Custom`
+- 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=ly&q={query}`
+
+输入 `ly` 显示全部已配对物理设备；输入 `ly air` 按名称过滤。选择音频设备后，工具向 Windows 蓝牙音频驱动发送重连请求，并在 worker 退出后重新枚举系统状态。驱动接受请求不等于最终成功，只有独立 AEP 状态变为已连接才报告成功。休眠 HID 设备可能需要先物理唤醒。
+
+蓝牙设置可在现有“配置 Listary 插件”窗口中修改，无需独立蓝牙页面；也对应 `BrowserHistoryLauncher.ini`：
+
+```ini
+[bluetooth]
+Enabled=true
+Keyword=ly
+CacheSeconds=8
+```
 
 ## 开机自动启动
 
