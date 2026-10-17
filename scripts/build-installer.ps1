@@ -1,11 +1,17 @@
 param(
-    [string]$AppVersion = '2.0.0'
+    [string]$AppVersion = '2.1.0'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 & (Join-Path $PSScriptRoot 'build-release.ps1')
+
+$application = Join-Path $projectRoot 'build\Release\BrowserHistoryLauncher.exe'
+$expectedVersion = ([version]($AppVersion + '.0')).ToString()
+if ((Get-Item -LiteralPath $application).VersionInfo.FileVersion -ne $expectedVersion) {
+    throw "Application version must match installer version $expectedVersion. Update src/app.rc before packaging."
+}
 
 $compilerCandidates = @(
     $env:ISCC_PATH,
@@ -31,5 +37,11 @@ if ($LASTEXITCODE -ne 0) {
 $output = Join-Path $projectRoot 'build\installer\ListaryBrowserPlugin-Setup-x64.exe'
 if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
     throw "Installer output was not created: $output"
+}
+$installerInfo = (Get-Item -LiteralPath $output).VersionInfo
+$installerVersion = [version]::new($installerInfo.FileMajorPart, $installerInfo.FileMinorPart,
+    $installerInfo.FileBuildPart, $installerInfo.FilePrivatePart)
+if ($installerVersion -ne [version]$expectedVersion) {
+    throw "Installer output version does not match $expectedVersion."
 }
 Get-Item -LiteralPath $output | Select-Object FullName, Length, LastWriteTime

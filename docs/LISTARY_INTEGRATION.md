@@ -84,7 +84,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-current-user.ps1 -Remov
 - 搜索提示：`Custom`
 - 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=ly&q={query}`
 
-输入 `ly` 显示全部已配对物理设备；输入 `ly air` 按名称过滤。选择音频设备后，工具向 Windows 蓝牙音频驱动发送重连请求，并在 worker 退出后重新枚举系统状态。驱动接受请求不等于最终成功，只有独立 AEP 状态变为已连接才报告成功。休眠 HID 设备可能需要先物理唤醒。
+输入 `ly` 显示全部已配对物理设备；输入 `ly air` 按名称过滤。选择音频设备后，工具向 Windows 蓝牙音频驱动发送重连请求。驱动接受请求后提示“已发送连接请求”，不等待或轮询最终状态；只有本次检查已显示连接时才提示“已经连接”。请求被接受不等于最终连接成功，下次正常设备查询会重新读取状态。休眠 HID 设备可能需要先物理唤醒。
 
 蓝牙设置可在现有“配置 Listary 插件”窗口中修改，无需独立蓝牙页面；也对应 `BrowserHistoryLauncher.ini`：
 
@@ -94,6 +94,30 @@ Enabled=true
 Keyword=ly
 CacheSeconds=8
 ```
+
+## 强制结束应用（v2.1.0）
+
+包含在 v2.1.0 安装包中，v2.0.0 安装包不含该功能。升级保留旧配置；在原有配置窗口启用“强制结束应用”，保存并应用即可。新安装默认开启该开关，仍需保存应用以写入 Listary 入口。
+
+- 默认关键字：`end`
+- 标题：`强制结束应用`
+- Url：`bhl://end?prefix=end&selection={query}`
+- 提示提供者：`Custom`
+- 自定义提示 URL：`http://127.0.0.1:32119/suggest?prefix=end&q={query}`
+
+输入 `end` 查看当前用户具有普通窗口的应用，输入 `end 飞书` 按窗口标题或 EXE 名称筛选。使用上下键选中带“强制结束”和 PID 的具体建议项，再回车确认；原始输入行不会自动选择第一个应用。确认框默认选“否”，明确选择“是”才执行。
+
+该操作调用 Windows 强制结束接口，不是软件自己的“退出”，未保存内容可能丢失。只处理所选窗口所属进程，不批量结束同名进程或进程树，因此不能保证所有后台子进程随之退出。只有托盘、没有普通窗口的应用不会显示；系统基础进程、关键/受保护进程、其他用户/会话和插件/Listary自身均排除，不会申请管理员权限。
+
+结果保存 PID、创建时间、完整 EXE 路径，30 秒过期；确认后在同一进程句柄上重新验证身份再操作。只在 `end` 查询到达时枚举，没有后台进程扫描、新常驻线程或额外运行时。
+
+```ini
+[applications]
+Enabled=true
+Keyword=end
+```
+
+旧 INI 缺少该节时默认不启用新功能；附带的 v2.1.0 INI 默认启用。蓝牙提示框增加前台权限转交与原生前台激活，默认按钮仍为“确定”。Windows 不保证允许后台程序抢走用户正在操作的另一窗口的焦点，参见 [SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)。
 
 ## 开机自动启动
 

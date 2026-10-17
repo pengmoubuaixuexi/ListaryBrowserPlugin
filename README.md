@@ -4,11 +4,17 @@
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin)
 
-一个 Windows 10/11 x64 原生 Listary 插件集合。程序只常驻一个轻量宿主：输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，输入 `ly` 按需列出已配对蓝牙设备。浏览器结果始终由来源浏览器和 Profile 打开；蓝牙没有独立页面，也不会后台扫描。
+一个 Windows 10/11 x64 原生 Listary 插件集合。程序只常驻一个轻量宿主：输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，输入 `ly` 按需列出已配对蓝牙设备，输入 `end` 选择并确认强制结束应用。浏览器结果始终由来源浏览器和 Profile 打开；蓝牙与结束应用没有独立页面，也不会后台扫描。
 
-当前稳定版本为 v2.0.0，图形安装器和便携 ZIP 均包含浏览器历史与 `ly` 蓝牙模块。v1.0.0 仅包含浏览器历史功能。
+当前版本为 [v2.1.0](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/tag/v2.1.0)，安装器和便携 ZIP 包含浏览器历史、`ly` 蓝牙连接及 `end` 强制结束应用。v2.0.0 包含浏览器历史与蓝牙功能；v1.0.0 仅包含浏览器历史功能。
 
-当前实现严格限于 Chromium 浏览历史，不搜索文件、应用、书签、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。
+v2.1.0 增加 `end` 强制结束应用与蓝牙提示框焦点修复，两个功能已经用户实机测试通过。在 Listary 输入 `end` 或 `end 飞书`，选择明确标注“强制结束”的下拉项，确认后结束该进程。确认默认选“否”，避免连续回车误操作。此操作不是应用内正常退出，可能丢失未保存内容；不关闭同名其他进程，不保证多进程应用的全部后台组件都退出。只列当前用户/会话、具有普通可见窗口的应用（最小化窗口通常也可列出），不列仅驻托盘/无窗口应用及系统基础进程，不自动提权。
+
+开关与关键词在已有“配置 Listary”窗口中设置；旧 INI 缺少 `[applications]` 时默认不启用新模块，避免抢占旧关键词。安装器保留旧 INI，升级后可勾选“启用强制结束应用”并“保存并应用全部”。新安装默认启用 `end`，同样需保存应用以注册 Listary 入口。蓝牙提示框请求前台并默认聚焦“确定”，正常情况下可直接按 Enter；若等待期间主动切换到别的应用，仍遵守 Windows 的前台限制，不模拟按键抢焦点。
+
+本轮测试与体积/内存记录见 [EXE 测试报告](docs/EXE_TEST_2026-10-17.md)。
+
+浏览器部分仅查询 Chromium 浏览历史，不搜索文件、书签、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。
 
 > 这是社区开发的非官方 Listary 扩展，与 Listary 官方无隶属或背书关系。本机已验证 Listary 6.3.5.94，Listary V7 已由实际用户验证兼容。
 
@@ -24,12 +30,14 @@ Listary 可以快速找到文件和应用，但浏览器内部访问过的页面
 
 ## 快速开始
 
-### 安装版 v2.0.0
+### 安装版 v2.1.0
 
 1. 从项目 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest) 下载 `ListaryBrowserPlugin-Setup-x64.exe`。
 2. 完成当前用户安装；默认可选择开机启动，不需要管理员权限。
-3. 安装结束后，在自动打开的“配置 Listary”页面设置浏览器和蓝牙关键字。
-4. 保存后呼出 Listary：输入 `g`/`e` 搜索浏览器历史，输入 `ly` 列出已配对蓝牙设备。
+3. 安装结束后，在自动打开的“配置 Listary”页面设置浏览器、蓝牙及强制结束应用的开关与关键字，点击“保存并应用全部”。
+4. 保存后呼出 Listary：输入 `g`/`e` 搜索浏览器历史，输入 `ly` 列出已配对蓝牙设备，输入 `end` 选择需要强制结束的应用。
+
+已有版本可直接覆盖升级，不必先卸载。沿用原 AppId 与安装目录，保留浏览器、蓝牙、快捷键配置；旧配置缺少 `end` 时需要在配置窗口启用并保存。静默安装不会打开配置窗口，可稍后从托盘进入。自行构建的安装包位于 `build\artifacts\ListaryBrowserPlugin-Setup-x64.exe`。
 
 安装器未经 Authenticode 商业证书签名，Windows 可能显示“未知发布者”。请只从本项目 Releases 页面下载，并用同一版本的 `SHA256SUMS.txt` 核对文件。
 
@@ -41,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 .\build\Release\BrowserHistoryLauncher.exe
 ```
 
-从托盘或浏览器历史窗口打开“配置 Listary”，保存后会同时写入已启用浏览器和 `ly` 蓝牙项。
+从托盘或浏览器历史窗口打开“配置 Listary”，保存后会同时写入已启用浏览器、`ly` 蓝牙和 `end` 强制结束应用项。
 
 ## 运行
 
@@ -113,6 +121,11 @@ INI 的 `[bluetooth]` 支持：
 - `Keyword`：默认 `ly`，必须与浏览器关键字唯一。
 - `CacheSeconds`：设备枚举短缓存，限制为 1–30 秒，默认 8。
 
+INI 的 `[applications]` 支持：
+
+- `Enabled`：是否启用强制结束应用；旧 INI 缺少该节时默认关闭。
+- `Keyword`：默认 `end`，必须与浏览器和蓝牙关键字唯一。
+
 每个 `[browser.<id>]` 描述一个 Chromium 浏览器：
 
 - `Name`：显示名称。
@@ -144,6 +157,8 @@ INI 的 `[bluetooth]` 支持：
 ## English
 
 Listary Plugin Suite is an unofficial, privacy-focused Listary extension for Windows 10/11 x64. It shows local Chromium browser history and paired Bluetooth devices directly in Listary's dropdown. Bluetooth enumeration and audio-device connection requests run only on demand in short-lived worker processes; there is no background device scan or separate Bluetooth UI.
+
+Version 2.1.0 adds `end` to select and forcibly terminate a visible application process after confirmation, with **No** selected by default, and fixes keyboard focus for Bluetooth feedback dialogs. Force termination is not a graceful application exit and may lose unsaved work; it affects only the selected process, not a process tree. Existing settings are preserved during upgrades; enable the new module in **Configure Listary** and save if upgrading from an older configuration.
 
 The runtime is native C++20/Win32, does not upload browsing data, does not build a background full-history index, and uses about 2.24 MiB private working set in the measured Listary-only idle scenario. Listary 6.3.5.94 was verified locally, and a real user has confirmed compatibility with Listary V7.
 

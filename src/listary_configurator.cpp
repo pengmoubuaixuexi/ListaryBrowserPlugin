@@ -1,6 +1,7 @@
 #include "listary_configurator.h"
 
 #include "browser_launcher.h"
+#include "config_store.h"
 #include "json_document.h"
 #include "text_util.h"
 
@@ -105,6 +106,7 @@ bool IsOurInsertion(const JsonValue& insertion) {
     if (!item) return false;
     return StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://open?") ||
         StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://bluetooth?") ||
+        StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://end?") ||
         StartsWithInsensitive(StringProperty(*item, L"SuggestionUrl"), L"http://127.0.0.1:32119/suggest?");
 }
 
@@ -158,8 +160,9 @@ JsonValue MakeInsertion(const BrowserDefinition& browser) {
     return insertion;
 }
 
-JsonValue MakeBluetoothInsertion(const BluetoothConfig& bluetooth) {
-    const std::wstring encodedPrefix = UrlEncode(bluetooth.keyword);
+JsonValue MakePluginInsertion(const std::wstring& keyword, std::wstring_view action,
+    const std::wstring& title) {
+    const std::wstring encodedPrefix = UrlEncode(keyword);
     wchar_t modulePath[32768]{};
     GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
     JsonValue icon = JsonValue::ObjectValue();
@@ -167,10 +170,10 @@ JsonValue MakeBluetoothInsertion(const BluetoothConfig& bluetooth) {
     icon.Set(L"TypeName", JsonValue::String(L"Path"));
 
     JsonValue item = JsonValue::ObjectValue();
-    item.Set(L"Keyword", JsonValue::String(bluetooth.keyword));
+    item.Set(L"Keyword", JsonValue::String(keyword));
     item.Set(L"Url", JsonValue::String(
-        L"bhl://bluetooth?prefix=" + encodedPrefix + L"&selection={query}"));
-    item.Set(L"Title", JsonValue::String(L"蓝牙设备"));
+        L"bhl://" + std::wstring(action) + L"?prefix=" + encodedPrefix + L"&selection={query}"));
+    item.Set(L"Title", JsonValue::String(title));
     item.Set(L"Icon", std::move(icon));
     item.Set(L"SuggestionProvider", JsonValue::String(L"Custom"));
     item.Set(L"SuggestionUrl", JsonValue::String(
@@ -375,6 +378,7 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
     const std::filesystem::path& preferencesPath, const std::filesystem::path& statePath) {
     ListaryConfigurationResult result;
     result.preferencesPath = preferencesPath;
+    if (!ConfigStore::Validate(config, result.message)) return result;
     if (preferencesPath.empty() || !std::filesystem::is_regular_file(preferencesPath)) {
         result.message = L"未找到受支持的 Listary 配置文件。";
         return result;
@@ -399,6 +403,16 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
             }
         }
     }
+    if (config.appTermination.enabled) {
+        for (const auto& existing : insertionArray) {
+            const JsonValue* item = ItemObject(existing);
+            if (item && ToLowerInvariant(StringProperty(*item, L"Keyword")) ==
+                    ToLowerInvariant(config.appTermination.keyword)) {
+                result.message = L"Listary 关键字已被其他自定义项目占用：" + config.appTermination.keyword;
+                return result;
+            }
+        }
+    }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;
         for (const auto& existing : insertionArray) {
@@ -410,13 +424,17 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
         }
     }
 
-    bool needsGoogleDisabled = false;
-    if (config.bluetooth.enabled) insertionArray.push_back(MakeBluetoothInsertion(config.bluetooth));
+    if (config.bluetooth.enabled) {
+        insertionArray.push_back(MakePluginInsertion(config.bluetooth.keyword, L"bluetooth", L"蓝牙设备"));
+    }
+    if (config.appTermination.enabled) {
+        insertionArray.push_back(MakePluginInsertion(config.appTermination.keyword, L"end", L"强制结束应用"));
+    }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;
         insertionArray.push_back(MakeInsertion(browser));
-        if (ToLowerInvariant(browser.prefix) == L"g") needsGoogleDisabled = true;
     }
+    const bool needsGoogleDisabled = HasOurGoogleInsertion(insertionArray);
 
     auto& updateArray = updates->array();
     const bool googleAlreadyDisabled = HasDisabledGoogleUpdate(updateArray);

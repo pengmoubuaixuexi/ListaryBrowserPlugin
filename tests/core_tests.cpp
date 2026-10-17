@@ -1,4 +1,5 @@
 #include "browser_discovery.h"
+#include "app_termination_tests.h"
 #include "browser_icon.h"
 #include "browser_launcher.h"
 #include "chromium_history_adapter.h"
@@ -136,6 +137,8 @@ std::wstring BhlIconPath(const JsonValue& root, std::wstring_view keyword) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    int helperExitCode = 0;
+    if (TryRunAppTerminationTestHelper(argc, argv, helperExitCode)) return helperExitCode;
     wchar_t captureBuffer[32768]{};
     if (GetEnvironmentVariableW(L"BHL_TEST_CAPTURE", captureBuffer, 32768) > 0 && argc >= 2) {
         std::ofstream capture(std::filesystem::path(captureBuffer), std::ios::binary);
@@ -268,11 +271,23 @@ int wmain(int argc, wchar_t** argv) {
             "Bluetooth keyword collision with a browser prefix is rejected");
     }
 
+    auto appCollision = config;
+    appCollision.appTermination.keyword = appCollision.bluetooth.keyword;
+    Check(!ConfigStore::Validate(appCollision, error), "application keyword cannot collide with Bluetooth");
+    appCollision.appTermination.keyword = L"bad key";
+    Check(!ConfigStore::Validate(appCollision, error), "invalid application keyword is rejected");
+    if (!config.browsers.empty()) {
+        appCollision.appTermination.keyword = config.browsers.front().prefix;
+        appCollision.browsers.front().enabled = true;
+        Check(!ConfigStore::Validate(appCollision, error), "application keyword cannot collide with a browser");
+    }
+
     const auto tempRoot = std::filesystem::temp_directory_path() /
         (L"BHL-CoreTests-" + std::to_wstring(GetCurrentProcessId()));
     std::error_code ignored;
     std::filesystem::remove_all(tempRoot, ignored);
     std::filesystem::create_directories(tempRoot);
+    RunAppTerminationTests(Check, tempRoot);
     wchar_t selfPathBuffer[32768]{};
     GetModuleFileNameW(nullptr, selfPathBuffer, 32768);
     const auto fakeListary = tempRoot / L"Listary.exe";
@@ -336,6 +351,8 @@ int wmain(int argc, wchar_t** argv) {
     const auto noHotkeyConfig = ConfigStore::Load(noHotkeyIni, noHotkeyWarning);
     Check(noHotkeyConfig.hotkeyVirtualKey == 0 && noHotkeyConfig.hotkeyModifiers == 0,
         "Hotkey=none disables the native global hotkey");
+    Check(!noHotkeyConfig.appTermination.enabled,
+        "legacy INI without applications section does not reserve an existing end keyword");
     const auto editableIni = tempRoot / L"editable.ini";
     std::filesystem::copy_file(ini, editableIni, std::filesystem::copy_options::overwrite_existing, ignored);
     auto editableConfig = ConfigStore::Load(editableIni, warning);
@@ -377,12 +394,27 @@ int wmain(int argc, wchar_t** argv) {
     auto listarySettingsConfig = ConfigStore::Load(editableIni, warning);
     listarySettingsConfig.bluetooth.enabled = false;
     listarySettingsConfig.bluetooth.keyword = L"bt";
+    listarySettingsConfig.appTermination.enabled = false;
+    listarySettingsConfig.appTermination.keyword = L"quit";
     Check(ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
-        listarySettingsConfig.bluetooth, error), "browser and Bluetooth settings persist atomically");
+        listarySettingsConfig.bluetooth, listarySettingsConfig.appTermination, error),
+        "browser, Bluetooth and application settings persist atomically");
     const auto listarySettingsPersisted = ConfigStore::Load(editableIni, warning);
     Check(!listarySettingsPersisted.bluetooth.enabled &&
         listarySettingsPersisted.bluetooth.keyword == L"bt",
         "Bluetooth enabled state and keyword round-trip");
+    Check(!listarySettingsPersisted.appTermination.enabled && listarySettingsPersisted.appTermination.keyword == L"quit",
+        "application enabled state and keyword round-trip");
+    Check(ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
+        listarySettingsConfig.bluetooth, error) && ConfigStore::Load(editableIni, warning).appTermination.keyword == L"quit",
+        "legacy settings API preserves application configuration");
+    const auto beforeInvalidSave = ReadFile(editableIni);
+    auto invalidAppSettings = listarySettingsConfig.appTermination;
+    invalidAppSettings.enabled = true;
+    invalidAppSettings.keyword = L"bad key";
+    Check(!ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
+        listarySettingsConfig.bluetooth, invalidAppSettings, error) && ReadFile(editableIni) == beforeInvalidSave,
+        "invalid application settings cannot partially modify INI");
     JsonValue jsonRoundTrip;
     std::wstring jsonError;
     Check(ParseJsonUtf8("{\"text\":\"\\u4e2d\\u6587\",\"array\":[true,false,null,-1.25e2]}",
@@ -420,31 +452,45 @@ int wmain(int argc, wchar_t** argv) {
         "Listary configuration creates a backup");
     JsonValue configuredDocument;
     Check(ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 3 && CountDisabledGoogleUpdates(configuredDocument) == 1,
-        "Listary configuration adds browser and Bluetooth entries and resolves built-in g conflict");
+        CountBhlInsertions(configuredDocument) == 4 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        "Listary configuration adds browser, Bluetooth and end entries and resolves built-in g conflict");
     Check(BhlIconPath(configuredDocument, L"g") == noHotkeyIni.wstring(),
         "Listary insertion uses the configured icon path");
     const auto configuredAgain = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
     Check(configuredAgain.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 3,
+        CountBhlInsertions(configuredDocument) == 4,
         "Listary configuration is idempotent");
+    auto disabledApplications = listaryConfig;
+    disabledApplications.appTermination.enabled = false;
+    const auto disabledApplicationsResult = ListaryConfigurator::Configure(disabledApplications, listaryPreferences, listaryState);
+    Check(disabledApplicationsResult.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 3 && ReadFile(listaryPreferences).find("bhl://end?") == std::string::npos,
+        "disabling end removes only its managed Listary entry");
+    auto renamedApplications = listaryConfig;
+    renamedApplications.appTermination.keyword = L"quit";
+    const auto renamedApplicationsResult = ListaryConfigurator::Configure(renamedApplications, listaryPreferences, listaryState);
+    Check(renamedApplicationsResult.ok && ReadFile(listaryPreferences).find("bhl://end?prefix=quit") != std::string::npos &&
+        ReadFile(listaryPreferences).find("bhl://end?prefix=end") == std::string::npos,
+        "changing application keyword removes the obsolete entry");
+    Check(ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState).ok,
+        "application keyword can be restored after rename");
     const auto configuredEdgeOnly = ListaryConfigurator::ConfigureBrowser(
         listaryEdge, L"e", listaryPreferences, listaryState);
     Check(configuredEdgeOnly.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 2 && !BhlIconPath(configuredDocument, L"e").empty() &&
+        CountBhlInsertions(configuredDocument) == 3 && !BhlIconPath(configuredDocument, L"e").empty() &&
         CountDisabledGoogleUpdates(configuredDocument) == 0,
         "first per-browser configuration migrates old bulk entries to selected browser only");
     const auto configuredChromeAlso = ListaryConfigurator::ConfigureBrowser(
         listaryChrome, L"g", listaryPreferences, listaryState);
     Check(configuredChromeAlso.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 3 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        CountBhlInsertions(configuredDocument) == 4 && CountDisabledGoogleUpdates(configuredDocument) == 1,
         "later per-browser configuration preserves previously selected browsers");
     auto disabledEdge = listaryEdge;
     disabledEdge.enabled = false;
     const auto removedEdge = ListaryConfigurator::ConfigureBrowser(
         disabledEdge, L"e", listaryPreferences, listaryState);
     Check(removedEdge.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 2 && BhlIconPath(configuredDocument, L"e").empty(),
+        CountBhlInsertions(configuredDocument) == 3 && BhlIconPath(configuredDocument, L"e").empty(),
         "per-browser disable removes only the selected browser");
     const auto removedListary = ListaryConfigurator::Remove(listaryPreferences, listaryState);
     Check(removedListary.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
@@ -458,6 +504,12 @@ int wmain(int argc, wchar_t** argv) {
     const auto conflictedListary = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
     Check(!conflictedListary.ok && ReadFile(listaryPreferences) == beforeConflict,
         "Listary keyword conflict fails without modifying preferences");
+    const std::string appConflictSample =
+        "{\"WebSearch\":{\"Items\":{\"Insertions\":[{\"Item\":{\"Keyword\":\"end\",\"Url\":\"https://other.test/{query}\"}}],\"Updates\":[]}}}";
+    Check(WriteUtf8File(listaryPreferences, appConflictSample), "create external end keyword conflict");
+    const auto conflictingApplications = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
+    Check(!conflictingApplications.ok && ReadFile(listaryPreferences) == appConflictSample,
+        "end registration never overwrites another custom Listary action");
     {
         std::ofstream state(tempRoot / L"Local State", std::ios::binary);
         state << "{\"profile\":{\"info_cache\":{\"Default\":{},\"Profile 1\":{}}}}";

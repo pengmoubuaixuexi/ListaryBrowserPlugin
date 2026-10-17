@@ -2,10 +2,14 @@
 #include <CommCtrl.h>
 #include <Psapi.h>
 
+#include "foreground_dialog.h"
+
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -117,16 +121,122 @@ bool LaunchQuery(const wchar_t* application, std::wstring_view query) {
     CloseHandle(process.hProcess);
     return wait == WAIT_OBJECT_0;
 }
+
+int RunDialogHelper(bool defaultNo) {
+    HWND owner = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"STATIC",
+        L"BrowserHistoryLauncher dialog test owner", WS_POPUP,
+        0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!owner) return 100;
+    const int result = ForegroundMessageBox(owner,
+        L"这是独立测试进程的提示框，不会连接设备或结束其他应用。",
+        defaultNo ? L"结束应用测试" : L"蓝牙设备",
+        defaultNo ? MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING : MB_OK | MB_ICONINFORMATION);
+    DestroyWindow(owner);
+    return result;
+}
+
+HWND WaitForOwnedDialog(DWORD processId, const wchar_t* title, HANDLE process, DWORD timeoutMs) {
+    const auto deadline = GetTickCount64() + timeoutMs;
+    while (GetTickCount64() < deadline) {
+        HWND candidate = nullptr;
+        while ((candidate = FindWindowExW(nullptr, candidate, L"#32770", title)) != nullptr) {
+            DWORD candidateProcessId = 0;
+            GetWindowThreadProcessId(candidate, &candidateProcessId);
+            if (candidateProcessId == processId) return candidate;
+        }
+        if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) break;
+        Sleep(10);
+    }
+    return nullptr;
+}
+
+bool HasExpectedDialogFocus(HWND dialog, DWORD processId, int buttonId) {
+    if (!dialog || GetForegroundWindow() != dialog) return false;
+    DWORD actualProcessId = 0;
+    const DWORD threadId = GetWindowThreadProcessId(dialog, &actualProcessId);
+    GUITHREADINFO info{sizeof(info)};
+    const HWND button = GetDlgItem(dialog, buttonId);
+    return actualProcessId == processId && button && GetGUIThreadInfo(threadId, &info) &&
+        info.hwndFocus == button;
+}
+
+void TestForegroundDialog(bool defaultNo) {
+    wchar_t executable[32768]{};
+    GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
+    std::wstring command = L"\"" + std::wstring(executable) + L"\" --dialog-helper";
+    if (defaultNo) command += L" --default-no";
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION helper{};
+    const bool launched = CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE,
+        CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup, &helper) != FALSE;
+    Check(launched, defaultNo ? "start isolated default-No dialog helper" :
+        "start isolated Bluetooth-style dialog helper");
+    if (!launched) return;
+
+    // Grant only this child permission before it creates the dialog. The actual
+    // foreground/focus checks below still fail if the desktop denies activation.
+    const BOOL granted = AllowSetForegroundWindow(helper.dwProcessId);
+    std::cout << "METRIC dialog_helper_foreground_granted=" << (granted ? 1 : 0) << '\n';
+    ResumeThread(helper.hThread);
+    CloseHandle(helper.hThread);
+    HWND dialog = WaitForOwnedDialog(helper.dwProcessId,
+        defaultNo ? L"结束应用测试" : L"蓝牙设备", helper.hProcess, 5000);
+    Check(dialog != nullptr, defaultNo ? "default-No dialog belongs to the test helper" :
+        "Bluetooth-style dialog belongs to the test helper");
+
+    const int expectedButton = defaultNo ? IDNO : IDOK;
+    const auto focusDeadline = GetTickCount64() + 5000;
+    while (dialog && GetTickCount64() < focusDeadline &&
+            !HasExpectedDialogFocus(dialog, helper.dwProcessId, expectedButton)) Sleep(10);
+    const bool focused = HasExpectedDialogFocus(dialog, helper.dwProcessId, expectedButton);
+    Check(focused, defaultNo ? "confirmation is foreground with No focused by default" :
+        "Bluetooth-style result is foreground with OK focused");
+
+    bool entered = false;
+    // Never inject a key unless the foreground and focused button are still
+    // owned by this test process. Do not mask focus failures with WM_COMMAND.
+    if (focused && HasExpectedDialogFocus(dialog, helper.dwProcessId, expectedButton)) {
+        INPUT input[2]{};
+        input[0].type = INPUT_KEYBOARD;
+        input[0].ki.wVk = VK_RETURN;
+        input[1] = input[0];
+        input[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        entered = SendInput(static_cast<UINT>(std::size(input)), input, sizeof(INPUT)) == std::size(input);
+    }
+    const DWORD wait = WaitForSingleObject(helper.hProcess, entered ? 5000 : 0);
+    DWORD exitCode = STILL_ACTIVE;
+    GetExitCodeProcess(helper.hProcess, &exitCode);
+    Check(entered && wait == WAIT_OBJECT_0 && exitCode == static_cast<DWORD>(expectedButton),
+        defaultNo ? "Enter selects No without any destructive action" :
+        "Enter dismisses the focused Bluetooth-style result with IDOK");
+    if (wait != WAIT_OBJECT_0) {
+        // Cleanup is limited to the helper we just created; no real app is targeted.
+        TerminateProcess(helper.hProcess, 101);
+        WaitForSingleObject(helper.hProcess, 5000);
+    }
+    CloseHandle(helper.hProcess);
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    if (argc >= 2 && std::wstring_view(argv[1]) == L"--dialog-helper") {
+        return RunDialogHelper(argc >= 3 && std::wstring_view(argv[2]) == L"--default-no");
+    }
+    if (argc >= 2 && std::wstring_view(argv[1]) == L"--dialog-focus-only") {
+        TestForegroundDialog(false);
+        TestForegroundDialog(true);
+        std::cout << "SUMMARY failures=" << failures << '\n';
+        return failures == 0 ? 0 : 1;
+    }
     if (argc < 2) {
         std::cerr << "usage: UiSmokeTests <BrowserHistoryLauncher.exe>\n";
         return 2;
     }
     Check(FindWindowW(kWindowClass, nullptr) == nullptr, "no pre-existing launcher instance");
     if (failures) return 1;
+    TestForegroundDialog(false);
+    TestForegroundDialog(true);
 
     std::wstring command = L"\"" + std::wstring(argv[1]) + L"\"";
     STARTUPINFOW startup{sizeof(startup)};
@@ -208,6 +318,13 @@ int wmain(int argc, wchar_t** argv) {
             Check(bluetoothEnabled && SendMessageW(bluetoothEnabled, BM_GETCHECK, 0, 0) == BST_CHECKED &&
                 bluetoothKeyword && WindowText(bluetoothKeyword) == L"ly",
                 "Bluetooth controls load the active configuration");
+            const HWND appTerminationEnabled = GetDlgItem(settingsWindow, 1201);
+            const HWND appTerminationKeyword = GetDlgItem(settingsWindow, 1202);
+            Check(appTerminationEnabled && appTerminationKeyword,
+                "configuration dialog exposes app termination enabled and keyword controls");
+            Check(appTerminationEnabled && SendMessageW(appTerminationEnabled, BM_GETCHECK, 0, 0) == BST_CHECKED &&
+                appTerminationKeyword && WindowText(appTerminationKeyword) == L"end",
+                "app termination controls load the enabled end keyword");
             const HWND iconEdit = GetDlgItem(settingsWindow, 1004);
             std::filesystem::path iconPath;
             const auto iconDeadline = GetTickCount64() + 5000;

@@ -172,6 +172,11 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
         ReadValue(iniPath, L"bluetooth", L"CacheSeconds", L"8").c_str(), nullptr, 10), 1, 30);
     config.bluetooth.connectTimeoutMs = std::clamp<UINT>(std::wcstoul(
         ReadValue(iniPath, L"bluetooth", L"ConnectTimeoutMs", L"20000").c_str(), nullptr, 10), 1000, 30000);
+    // Existing installations may already use "end" as a browser keyword.
+    // New portable INIs opt in explicitly; do not break an older configuration.
+    config.appTermination.enabled = ReadBool(iniPath, L"applications", L"Enabled", false);
+    config.appTermination.keyword = ToLowerInvariant(
+        ReadValue(iniPath, L"applications", L"Keyword", L"end"));
 
     const auto sections = EnumerateBrowserSections(iniPath);
     if (sections.empty()) {
@@ -265,6 +270,27 @@ bool ConfigStore::SaveBrowserSettings(const std::filesystem::path& iniPath,
 bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
     const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
     std::wstring& error) {
+    std::wstring warning;
+    const auto existing = Load(iniPath, warning);
+    return SaveListarySettings(iniPath, browsers, bluetooth, existing.appTermination, error);
+}
+
+bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
+    const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
+    const AppTerminationConfig& appTermination, std::wstring& error) {
+    std::wstring warning;
+    auto candidate = Load(iniPath, warning);
+    if (!std::filesystem::exists(iniPath)) candidate.browsers.clear();
+    for (const auto& browser : browsers) {
+        auto existing = std::find_if(candidate.browsers.begin(), candidate.browsers.end(),
+            [&](const BrowserDefinition& item) { return item.id == browser.id; });
+        if (existing == candidate.browsers.end()) candidate.browsers.push_back(browser);
+        else *existing = browser;
+    }
+    candidate.bluetooth = bluetooth;
+    candidate.appTermination = appTermination;
+    if (!Validate(candidate, error)) return false;
+
     const auto temporaryPath = std::filesystem::path(iniPath.wstring() + L".bhl-tmp");
     std::error_code fileError;
     std::filesystem::remove(temporaryPath, fileError);
@@ -294,6 +320,14 @@ bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
         std::filesystem::remove(temporaryPath, fileError);
         return false;
     }
+    if (!WritePrivateProfileStringW(L"applications", L"Enabled",
+            appTermination.enabled ? L"true" : L"false", temporaryPath.c_str()) ||
+        !WritePrivateProfileStringW(L"applications", L"Keyword",
+            appTermination.keyword.c_str(), temporaryPath.c_str())) {
+        error = L"无法写入强制结束应用配置：" + temporaryPath.wstring() + L"。";
+        std::filesystem::remove(temporaryPath, fileError);
+        return false;
+    }
     WritePrivateProfileStringW(nullptr, nullptr, nullptr, temporaryPath.c_str());
     if (!MoveFileExW(temporaryPath.c_str(), iniPath.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -318,6 +352,18 @@ bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {
             return false;
         }
         prefixes.insert(ToLowerInvariant(config.bluetooth.keyword));
+    }
+    if (config.appTermination.enabled) {
+        const auto& keyword = config.appTermination.keyword;
+        if (keyword.empty() || keyword.size() > 16 || keyword.find_first_not_of(
+                L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::wstring::npos) {
+            error = L"强制结束应用关键字应为 1–16 个字母、数字、- 或 _。";
+            return false;
+        }
+        if (!prefixes.insert(ToLowerInvariant(keyword)).second) {
+            error = L"Listary 关键字冲突：" + keyword;
+            return false;
+        }
     }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;

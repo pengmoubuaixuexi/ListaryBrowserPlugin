@@ -3,6 +3,7 @@
 
 #include "listary_suggestion_server.h"
 
+#include "app_termination.h"
 #include "bluetooth_worker.h"
 #include "browser_registry.h"
 #include "chromium_history_adapter.h"
@@ -30,6 +31,30 @@
 namespace {
 constexpr std::size_t kMaxRequestBytes = 16 * 1024;
 constexpr std::size_t kMaxCachedMappings = 512;
+
+class ClientActivityGuard {
+public:
+    ClientActivityGuard(std::atomic<unsigned>& inFlight, std::atomic<ULONGLONG>& lastSuggestion)
+        : inFlight_(inFlight), lastSuggestion_(lastSuggestion) {
+        inFlight_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    ~ClientActivityGuard() {
+        // A slow query gets the full idle grace period after its response too.
+        if (suggestion_) lastSuggestion_.store(GetTickCount64(), std::memory_order_release);
+        inFlight_.fetch_sub(1, std::memory_order_release);
+    }
+    ClientActivityGuard(const ClientActivityGuard&) = delete;
+    ClientActivityGuard& operator=(const ClientActivityGuard&) = delete;
+
+    void MarkSuggestion() {
+        suggestion_ = true;
+        lastSuggestion_.store(GetTickCount64(), std::memory_order_release);
+    }
+private:
+    std::atomic<unsigned>& inFlight_;
+    std::atomic<ULONGLONG>& lastSuggestion_;
+    bool suggestion_ = false;
+};
 
 std::string EncodeUtf8(std::wstring_view value) {
     if (value.empty()) return {};
@@ -129,6 +154,31 @@ std::wstring DisplayText(const HistoryResult& item) {
     const auto host = item.url.substr(hostStart, hostEnd == std::wstring::npos ? std::wstring::npos : hostEnd - hostStart);
     if (!host.empty() && title.find(host) == std::wstring::npos) title += L"  —  " + host;
     return title;
+}
+
+std::wstring AppDisplayComponent(std::wstring_view value, std::size_t limit) {
+    std::wstring display = Trim(value);
+    for (auto& ch : display) {
+        if (ch < L' ') ch = L' ';
+    }
+    if (display.size() > limit) {
+        // Keep a UTF-16 surrogate pair intact at the truncation boundary;
+        // otherwise strict UTF-8 encoding would erase the entire suggestion.
+        if (limit > 0 && display[limit - 1] >= 0xD800 && display[limit - 1] <= 0xDBFF &&
+            display[limit] >= 0xDC00 && display[limit] <= 0xDFFF) --limit;
+        display = display.substr(0, limit) + L"…";
+    }
+    return display;
+}
+
+std::wstring AppDisplayText(const AppProcessTarget& target) {
+    auto name = AppDisplayComponent(target.displayName, 80);
+    if (name.empty()) name = AppDisplayComponent(std::filesystem::path(target.executablePath).filename().wstring(), 80);
+    const auto title = AppDisplayComponent(target.windowTitle, 100);
+    std::wstring display = L"强制结束 " + name;
+    if (!title.empty() && ToLowerInvariant(title) != ToLowerInvariant(name)) display += L"  —  " + title;
+    display += L"  —  PID " + std::to_wstring(target.processId);
+    return display;
 }
 
 std::string SuggestionJson(std::wstring_view query, const SearchResponse& response) {
@@ -244,7 +294,7 @@ struct ListarySuggestionServer::Impl {
         }
         if (found->second.expiresAt != std::chrono::steady_clock::time_point{} &&
             std::chrono::steady_clock::now() >= found->second.expiresAt) {
-            error = L"蓝牙设备结果已经过期。请重新输入关键字并选择最新状态。";
+            error = L"Listary 结果已经过期。请重新输入关键字并选择最新结果。";
             return std::nullopt;
         }
         return found->second.result;
@@ -263,6 +313,7 @@ struct ListarySuggestionServer::Impl {
     }
 
     void HandleClient(SOCKET client) {
+        ClientActivityGuard activity(clientsInFlight, lastSuggestionTick);
         std::string request;
         request.reserve(2048);
         char buffer[2048];
@@ -294,6 +345,7 @@ struct ListarySuggestionServer::Impl {
             SendResponse(client, 404, "Not Found", "text/plain; charset=utf-8", "not found");
             return;
         }
+        activity.MarkSuggestion();
         const auto prefix = QueryParameter(target, "prefix");
         const auto query = QueryParameter(target, "q");
         if (!prefix || !query || query->size() > 2048) {
@@ -303,6 +355,11 @@ struct ListarySuggestionServer::Impl {
         if (config.bluetooth.enabled &&
             ToLowerInvariant(*prefix) == ToLowerInvariant(config.bluetooth.keyword)) {
             HandleBluetoothSuggestion(client, *prefix, *query);
+            return;
+        }
+        if (config.appTermination.enabled &&
+            ToLowerInvariant(*prefix) == ToLowerInvariant(config.appTermination.keyword)) {
+            HandleAppSuggestion(client, *prefix, *query);
             return;
         }
         const auto* browser = registry.FindByPrefix(*prefix);
@@ -390,6 +447,18 @@ struct ListarySuggestionServer::Impl {
         SendResponse(client, 200, "OK", "application/json; charset=utf-8", SuggestionJson(query, suggestions));
     }
 
+    void HandleAppSuggestion(SOCKET client, std::wstring_view prefix, std::wstring_view query) {
+        // Invalidate the previous selection before enumeration, so an old row
+        // cannot launch while the refreshed process list is being collected.
+        {
+            std::lock_guard lock(mappingMutex);
+            RemoveAppMappingsLocked();
+        }
+        const auto targets = AppTermination::Enumerate(query, config.maxResults);
+        const auto suggestions = CacheAppMappings(prefix, query, targets);
+        SendResponse(client, 200, "OK", "application/json; charset=utf-8", SuggestionJson(query, suggestions));
+    }
+
     static std::wstring MappingKey(std::wstring_view prefix, std::wstring_view selection) {
         return ToLowerInvariant(prefix) + L"\n" + std::wstring(selection);
     }
@@ -440,6 +509,39 @@ struct ListarySuggestionServer::Impl {
         }
     }
 
+    void RemoveAppMappingsLocked() {
+        std::erase_if(mappings, [](const auto& entry) {
+            return entry.second.result.kind == ListaryActionKind::AppTerminate;
+        });
+        std::erase_if(mappingOrder, [this](const auto& entry) {
+            const auto found = mappings.find(entry.first);
+            return found == mappings.end() || found->second.sequence != entry.second;
+        });
+    }
+
+    std::vector<std::wstring> CacheAppMappings(std::wstring_view prefix, std::wstring_view query,
+        const std::vector<AppProcessTarget>& targets,
+        std::chrono::steady_clock::duration ttl = std::chrono::seconds(30)) {
+        std::lock_guard lock(mappingMutex);
+        RemoveAppMappingsLocked();
+        std::vector<std::wstring> suggestions;
+        std::set<std::wstring> emitted;
+        for (const auto& target : targets) {
+            if (suggestions.size() >= config.maxResults) break;
+            if (target.processId == 0 || target.creationTime == 0 || target.executablePath.empty()) continue;
+            auto display = AppDisplayText(target);
+            // Listary's raw-query row must never become a termination shortcut,
+            // even when the input exactly matches a rendered suggestion.
+            if (display == query || !emitted.insert(display).second) continue;
+            ListaryAction action;
+            action.kind = ListaryActionKind::AppTerminate;
+            action.appTarget = target;
+            StoreMapping(MappingKey(prefix, display), std::move(action), ttl);
+            suggestions.push_back(std::move(display));
+        }
+        return suggestions;
+    }
+
     struct CachedMapping {
         ListaryAction result;
         std::uint64_t sequence = 0;
@@ -477,6 +579,8 @@ struct ListarySuggestionServer::Impl {
     std::uint64_t mappingSequence = 0;
     std::atomic<bool> stopping{false};
     std::atomic<bool> bluetoothCacheInvalidated{false};
+    std::atomic<unsigned> clientsInFlight{0};
+    std::atomic<ULONGLONG> lastSuggestionTick{0};
     SOCKET listenSocket = INVALID_SOCKET;
     std::thread serverThread;
     bool winsockStarted = false;
@@ -502,6 +606,18 @@ void ListarySuggestionServer::InvalidateBluetoothCache() {
     impl_->bluetoothCacheInvalidated.store(true);
 }
 
+bool ListarySuggestionServer::CanRecycleHost(std::chrono::milliseconds idleFor) const {
+    if (impl_->clientsInFlight.load(std::memory_order_acquire) != 0) return false;
+    const ULONGLONG lastSuggestion = impl_->lastSuggestionTick.load(std::memory_order_acquire);
+    const ULONGLONG now = GetTickCount64();
+    const auto requiredIdle = static_cast<ULONGLONG>(std::max<std::int64_t>(0, idleFor.count()));
+    if (lastSuggestion != 0 && (now < lastSuggestion || now - lastSuggestion < requiredIdle)) return false;
+    // Recheck after reading the timestamp in case a request started or finished
+    // during the snapshot. This never takes the mapping or response locks.
+    return impl_->clientsInFlight.load(std::memory_order_acquire) == 0 &&
+        impl_->lastSuggestionTick.load(std::memory_order_acquire) == lastSuggestion;
+}
+
 #ifdef BHL_TESTING
 void ListarySuggestionServer::CacheMappingsForTest(const BrowserDefinition& browser,
     std::wstring_view prefix, std::wstring_view query, const SearchResponse& response) {
@@ -512,5 +628,11 @@ void ListarySuggestionServer::CacheMappingsForTest(const BrowserDefinition& brow
 void ListarySuggestionServer::CacheBluetoothMappingsForTest(std::wstring_view prefix,
     std::wstring_view query, const std::vector<BluetoothDeviceTarget>& devices) {
     impl_->CacheBluetoothMappings(prefix, query, devices);
+}
+
+std::vector<std::wstring> ListarySuggestionServer::CacheAppMappingsForTest(std::wstring_view prefix,
+    std::wstring_view query, const std::vector<AppProcessTarget>& targets,
+    std::chrono::steady_clock::duration ttl) {
+    return impl_->CacheAppMappings(prefix, query, targets, ttl);
 }
 #endif

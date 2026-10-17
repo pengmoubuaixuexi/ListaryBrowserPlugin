@@ -5,6 +5,7 @@
 #include "chromium_history_adapter.h"
 #include "config_store.h"
 #include "history_search_service.h"
+#include "foreground_dialog.h"
 #include "listary_configurator.h"
 #include "listary_settings_dialog.h"
 #include "listary_suggestion_server.h"
@@ -19,6 +20,7 @@
 #include <windowsx.h>
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 #include <algorithm>
@@ -41,6 +43,7 @@ constexpr UINT kResultsMessage = WM_APP + 12;
 constexpr UINT kExitMessage = WM_APP + 13;
 constexpr UINT kSettingsMessage = WM_APP + 14;
 constexpr UINT kBluetoothResultMessage = WM_APP + 15;
+constexpr UINT kListaryActionMessage = WM_APP + 16;
 constexpr ULONG_PTR kQueryCopyData = 0x42484C51;
 constexpr ULONG_PTR kListaryOpenCopyData = 0x42484C4F;
 constexpr wchar_t kProtocolKey[] = L"Software\\Classes\\bhl";
@@ -51,6 +54,19 @@ constexpr int kConfigButtonId = 103;
 constexpr int kMenuShow = 200;
 constexpr int kMenuSettings = 201;
 constexpr int kMenuExit = 202;
+
+bool IsListaryForeground() {
+    DWORD processId = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &processId);
+    if (!processId || processId == GetCurrentProcessId()) return false;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) return false;
+    wchar_t path[32768]{};
+    DWORD length = static_cast<DWORD>(std::size(path));
+    const bool readable = QueryFullProcessImageNameW(process, 0, path, &length) != FALSE;
+    CloseHandle(process);
+    return readable && StartsWithInsensitive(std::filesystem::path(path).filename().wstring(), L"Listary");
+}
 
 std::filesystem::path FindListaryExecutable() {
     const std::vector<std::filesystem::path> candidates = {
@@ -219,11 +235,15 @@ public:
         std::wstring error;
         const auto action = listaryServer_->ResolveUri(uri, error);
         if (!action) {
-            MessageBoxW(window_, error.c_str(), L"无法执行 Listary 结果", MB_OK | MB_ICONWARNING);
+            ShowActionMessage(error, L"无法执行 Listary 结果", MB_OK | MB_ICONWARNING);
             return;
         }
         if (action->kind == ListaryActionKind::BluetoothConnect) {
             StartBluetoothConnect(action->bluetoothTarget);
+            return;
+        }
+        if (action->kind == ListaryActionKind::AppTerminate) {
+            EndApplication(action->appTarget);
             return;
         }
         const auto& item = action->browserResult;
@@ -284,6 +304,11 @@ private:
         case kExitMessage: DestroyWindow(window_); return 0;
         case kSettingsMessage: Show(); ShowListarySettings(); return 0;
         case kBluetoothResultMessage: ApplyBluetoothResult(reinterpret_cast<BluetoothConnectionResult*>(lParam)); return 0;
+        case kListaryActionMessage: {
+            std::unique_ptr<std::wstring> uri(reinterpret_cast<std::wstring*>(lParam));
+            if (uri) OpenListaryUri(*uri);
+            return 0;
+        }
         case kResultsMessage: ApplyResults(reinterpret_cast<SearchResponse*>(lParam)); return 0;
         case WM_DESTROY:
             KillTimer(window_, kRecycleTimer);
@@ -295,15 +320,47 @@ private:
         return DefWindowProcW(window_, message, wParam, lParam);
     }
 
+    int ShowActionMessage(const std::wstring& message, const wchar_t* title, UINT flags) {
+        ++actionDialogDepth_;
+        const int result = ForegroundMessageBox(window_, message.c_str(), title, flags);
+        --actionDialogDepth_;
+        // Native dialogs can load IME/accessibility modules into an otherwise
+        // tiny host. Reuse the existing clean-host lifecycle after interaction;
+        // do not trim the working set or leave those UI modules resident.
+        if (actionDialogDepth_ == 0 && !IsWindowVisible(window_)) {
+            SetTimer(window_, kRecycleTimer, 5000, nullptr);
+        }
+        return result;
+    }
+
+    void EndApplication(const AppProcessTarget& target) {
+        // Modal loops can dispatch another URI. Never nest termination actions.
+        if (appTerminationBusy_) return;
+        appTerminationBusy_ = true;
+        const std::wstring prompt = L"强制结束 " + target.displayName + L"？\n\n" +
+            target.windowTitle + L"\nPID：" + std::to_wstring(target.processId) +
+            L"\n" + target.executablePath +
+            L"\n\n这不是软件自身的正常退出，未保存内容可能丢失。\n"
+            L"只结束选中的应用进程，不批量结束同名或子进程。";
+        if (ShowActionMessage(prompt, L"强制结束应用", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+            // Backend revalidates the strong identity after the user confirms.
+            const auto result = AppTermination::Terminate(target);
+            if (!result.succeeded) {
+                ShowActionMessage(result.message, L"无法结束应用", MB_OK | MB_ICONWARNING);
+            }
+        }
+        appTerminationBusy_ = false;
+    }
+
     void StartBluetoothConnect(const BluetoothDeviceTarget& target) {
         if (target.connected) {
-            MessageBoxW(window_, (target.displayName + L" 已经连接。").c_str(), L"蓝牙设备",
+            ShowActionMessage(target.displayName + L" 已经连接。", L"蓝牙设备",
                 MB_OK | MB_ICONINFORMATION);
             return;
         }
         bool expected = false;
         if (!bluetoothBusy_.compare_exchange_strong(expected, true)) {
-            MessageBoxW(window_, L"已有蓝牙连接操作正在进行，请稍后再试。", L"蓝牙设备",
+            ShowActionMessage(L"已有蓝牙连接操作正在进行，请稍后再试。", L"蓝牙设备",
                 MB_OK | MB_ICONINFORMATION);
             return;
         }
@@ -324,7 +381,7 @@ private:
         bluetoothBusy_.store(false);
         if (!result) return;
         if (result->requestAccepted && listaryServer_) listaryServer_->InvalidateBluetoothCache();
-        MessageBoxW(window_, result->message.c_str(), L"蓝牙设备",
+        ShowActionMessage(result->message, L"蓝牙设备",
             MB_OK | ((result->confirmedConnected || result->requestAccepted) ? MB_ICONINFORMATION : MB_ICONWARNING));
     }
 
@@ -339,7 +396,13 @@ private:
         if (text[count - 1] != L'\0') return FALSE;
         const std::wstring_view value(text, count - 1);
         if (data->dwData == kQueryCopyData) ShowWithQuery(value);
-        else OpenListaryUri(value);
+        else {
+            // Return COPYDATA promptly: a modal confirmation must not keep the
+            // protocol-launch process blocked (or outlive its send timeout).
+            auto pending = std::make_unique<std::wstring>(value);
+            if (!PostMessageW(window_, kListaryActionMessage, 0, reinterpret_cast<LPARAM>(pending.get()))) return FALSE;
+            pending.release();
+        }
         return TRUE;
     }
 
@@ -471,7 +534,12 @@ private:
 
     void RecycleHost() {
         KillTimer(window_, kRecycleTimer);
-        if (IsWindowVisible(window_) || !edit_) return;
+        if (IsWindowVisible(window_)) return;
+        if (actionDialogDepth_ || bluetoothBusy_.load() || appTerminationBusy_ || IsListaryForeground() ||
+            (listaryServer_ && !listaryServer_->CanRecycleHost(std::chrono::milliseconds(1500)))) {
+            SetTimer(window_, kRecycleTimer, 1500, nullptr);
+            return;
+        }
         const auto executable = ExecutableDirectory() / L"BrowserHistoryLauncher.exe";
         std::wstring command = BrowserLauncher::QuoteArgument(executable.wstring()) +
             L" --restart-host-after " + std::to_wstring(GetCurrentProcessId());
@@ -629,7 +697,9 @@ private:
 
         AppConfig candidate = config_;
         const BluetoothConfig originalBluetooth = config_.bluetooth;
+        const AppTerminationConfig originalAppTermination = config_.appTermination;
         candidate.bluetooth = selections->bluetooth;
+        candidate.appTermination = selections->appTermination;
         std::vector<BrowserDefinition> originalSettings;
         originalSettings.reserve(selections->browsers.size());
         for (const auto& selection : selections->browsers) {
@@ -673,7 +743,7 @@ private:
             StartListary(ignored);
         };
         if (!ConfigStore::SaveListarySettings(configPath_, selections->browsers,
-                selections->bluetooth, error)) {
+                selections->bluetooth, selections->appTermination, error)) {
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -682,14 +752,14 @@ private:
         AppConfig reloaded = ConfigStore::Load(configPath_, warning);
         if (!ConfigStore::Validate(reloaded, error)) {
             std::wstring ignored;
-            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, originalAppTermination, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
         }
         if (!RegisterListaryProtocol(ExecutableDirectory() / L"BrowserHistoryLauncher.exe", error)) {
             std::wstring ignored;
-            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, originalAppTermination, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -698,7 +768,7 @@ private:
         const auto configured = ListaryConfigurator::Configure(reloaded, preferences, statePath);
         if (!configured.ok) {
             std::wstring ignored;
-            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, originalAppTermination, ignored);
             restartAfterFailure();
             MessageBoxW(window_, configured.message.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -720,6 +790,7 @@ private:
             [](const BrowserDefinition& browser) { return browser.enabled; });
         std::wstring message = L"已一次应用 " + std::to_wstring(enabledCount) +
             L" 个浏览器和" + (config_.bluetooth.enabled ? L"蓝牙模块" : L"已停用的蓝牙模块") +
+            L"、" + (config_.appTermination.enabled ? L"强制结束应用模块" : L"已停用的强制结束应用模块") +
             L"，Listary 只重启了一次。备份：\n" + configured.backupPath.wstring();
         if (!serverStarted) message += L"\n\n建议服务警告：" + serverWarning;
         if (!listaryStarted) message += L"\n\n" + restartWarning;
@@ -746,6 +817,8 @@ private:
     std::unique_ptr<ListarySuggestionServer> listaryServer_;
     std::jthread bluetoothThread_;
     std::atomic<bool> bluetoothBusy_{false};
+    bool appTerminationBusy_ = false;
+    unsigned actionDialogDepth_ = 0;
     std::vector<HistoryResult> results_;
     std::uint64_t generation_ = 0;
 };
@@ -876,6 +949,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const bool alreadyRunning = GetLastError() == ERROR_ALREADY_EXISTS;
     if (alreadyRunning) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
+            if (!HasArgument(L"--exit")) GrantForegroundToWindow(existing);
             if (HasArgument(L"--exit")) {
                 PostMessageW(existing, kExitMessage, 0, 0);
             } else if (requestedSettings) {

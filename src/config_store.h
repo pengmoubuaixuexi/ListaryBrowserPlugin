@@ -17,5 +17,8 @@ public:
     static bool SaveListarySettings(const std::filesystem::path& iniPath,
         const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
         std::wstring& error);
+    static bool SaveListarySettings(const std::filesystem::path& iniPath,
+        const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
+        const AppTerminationConfig& appTermination, std::wstring& error);
     static AppConfig Defaults();
 };

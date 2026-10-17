@@ -13,6 +13,7 @@ $coreExit = $LASTEXITCODE
 $uiExit = $LASTEXITCODE
 & (Join-Path $PSScriptRoot 'test-bluetooth.ps1') -Executable $app
 $bluetoothExit = $LASTEXITCODE
+& (Join-Path $PSScriptRoot 'test-listary-actions.ps1') -Executable $app -CoreTestsExecutable $core
 if ($coreExit -ne 0 -or $uiExit -ne 0 -or $bluetoothExit -ne 0) {
     throw "Acceptance tests failed. core=$coreExit ui=$uiExit bluetooth=$bluetoothExit"
 }

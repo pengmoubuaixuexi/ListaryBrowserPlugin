@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include "app_termination.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -52,6 +53,11 @@ struct BluetoothConfig {
     UINT connectTimeoutMs = 20000;
 };
 
+struct AppTerminationConfig {
+    bool enabled = true;
+    std::wstring keyword = L"end";
+};
+
 struct BluetoothEnumerationResult {
     std::vector<BluetoothDeviceTarget> devices;
     std::wstring error;
@@ -91,18 +97,21 @@ struct AppConfig {
     std::size_t maxResults = 20;
     UINT debounceMs = 90;
     BluetoothConfig bluetooth;
+    AppTerminationConfig appTermination;
     std::vector<BrowserDefinition> browsers;
 };
 
 enum class ListaryActionKind {
     BrowserOpen,
-    BluetoothConnect
+    BluetoothConnect,
+    AppTerminate
 };
 
 struct ListaryAction {
     ListaryActionKind kind = ListaryActionKind::BrowserOpen;
     HistoryResult browserResult;
     BluetoothDeviceTarget bluetoothTarget;
+    AppProcessTarget appTarget;
 };
 
 struct SearchResponse {
