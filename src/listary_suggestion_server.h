@@ -32,8 +32,8 @@ public:
         std::wstring_view query, const SearchResponse& response);
     void CacheBluetoothMappingsForTest(std::wstring_view prefix, std::wstring_view query,
         const std::vector<BluetoothDeviceTarget>& devices);
-    std::vector<std::wstring> CacheBookmarkMappingsForTest(const BrowserDefinition& fallbackBrowser,
-        std::wstring_view prefix, std::wstring_view query, const SearchResponse& response);
+    std::vector<std::wstring> CacheBookmarkMappingsForTest(std::wstring_view prefix,
+        std::wstring_view query, const SearchResponse& response);
     std::vector<std::wstring> CacheAppMappingsForTest(std::wstring_view prefix,
         std::wstring_view query, const std::vector<AppProcessTarget>& targets,
         std::chrono::steady_clock::duration ttl = std::chrono::seconds(30));

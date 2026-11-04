@@ -431,13 +431,12 @@ struct ListarySuggestionServer::Impl {
                 SuggestionJson(query, SearchResponse{}));
             return;
         }
-        const BrowserDefinition fallbackBrowser = browsers.front();
         auto completed = RunSearch(std::move(browsers), query, SearchKind::Bookmarks);
         if (!completed) {
             SendResponse(client, 504, "Gateway Timeout", "application/json; charset=utf-8", "[\"\",[]]");
             return;
         }
-        const auto suggestions = CacheBookmarkMappings(fallbackBrowser, prefix, query, *completed);
+        const auto suggestions = CacheBookmarkMappings(prefix, query, *completed);
         SendResponse(client, 200, "OK", "application/json; charset=utf-8", SuggestionJson(query, suggestions));
     }
 
@@ -524,30 +523,40 @@ struct ListarySuggestionServer::Impl {
         }
     }
 
-    std::vector<std::wstring> CacheBookmarkMappings(const BrowserDefinition& fallbackBrowser,
-        std::wstring_view prefix, std::wstring_view query, const SearchResponse& completed) {
+    std::vector<std::wstring> CacheBookmarkMappings(std::wstring_view prefix,
+        std::wstring_view query, const SearchResponse& completed) {
         std::lock_guard lock(mappingMutex);
         std::vector<std::wstring> suggestions;
-        std::map<std::wstring, unsigned> duplicateCounts;
+        // Listary resolves a selection purely by its rendered text, and it
+        // always renders the raw query as a selectable row. Every bookmark row
+        // therefore needs a final display text that is unique and differs from
+        // the query, or two rows would share one mapping.
+        std::set<std::wstring> used;
         for (const auto& result : completed.results) {
             auto display = DisplayText(result);
             if (display.empty()) continue;
-            // Same title on two hosts/folders stays selectable via a suffix,
-            // mirroring the Bluetooth module's duplicate handling.
-            const unsigned duplicate = ++duplicateCounts[display];
-            if (duplicate > 1) display += L" (" + std::to_wstring(duplicate) + L")";
+            // Keep the query text reserved for the raw-query row; a bookmark
+            // named exactly like the query stays selectable via a marker.
+            if (display == query) display += L" · 书签";
+            // Numbered suffixes deduplicate both repeated bookmarks and names
+            // that already contain a literal "(2)"-style suffix themselves.
+            std::wstring candidate = display;
+            unsigned attempt = 2;
+            while (candidate == query || !used.insert(candidate).second) {
+                candidate = display + L" (" + std::to_wstring(attempt++) + L")";
+            }
             ListaryAction action;
             action.kind = ListaryActionKind::BrowserOpen;
             action.browserResult = result;
-            StoreMapping(MappingKey(prefix, display), std::move(action));
-            suggestions.push_back(std::move(display));
+            StoreMapping(MappingKey(prefix, candidate), std::move(action));
+            suggestions.push_back(std::move(candidate));
         }
-        // The raw-query row hands the input to the first enabled browser's
-        // address bar, so Enter on it never dead-ends.
-        if (auto fallback = MakeSearchFallback(fallbackBrowser, query)) {
+        // The raw-query row opens the top bookmark result, mirroring the
+        // Bluetooth module; bm never routes input to an unrelated browser.
+        if (!completed.results.empty()) {
             ListaryAction action;
             action.kind = ListaryActionKind::BrowserOpen;
-            action.browserResult = *fallback;
+            action.browserResult = completed.results.front();
             StoreMapping(MappingKey(prefix, query), std::move(action));
         }
         return suggestions;
@@ -698,9 +707,8 @@ void ListarySuggestionServer::CacheBluetoothMappingsForTest(std::wstring_view pr
 }
 
 std::vector<std::wstring> ListarySuggestionServer::CacheBookmarkMappingsForTest(
-    const BrowserDefinition& fallbackBrowser, std::wstring_view prefix,
-    std::wstring_view query, const SearchResponse& response) {
-    return impl_->CacheBookmarkMappings(fallbackBrowser, prefix, query, response);
+    std::wstring_view prefix, std::wstring_view query, const SearchResponse& response) {
+    return impl_->CacheBookmarkMappings(prefix, query, response);
 }
 
 std::vector<std::wstring> ListarySuggestionServer::CacheAppMappingsForTest(std::wstring_view prefix,

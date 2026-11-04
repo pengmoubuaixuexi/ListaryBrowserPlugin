@@ -218,20 +218,107 @@ int wmain(int argc, wchar_t** argv) {
     bookmarkResult.url = L"https://github.com/";
     bookmarkResult.browserId = genericSearchBrowser.id;
     bookmarkResult.browserName = genericSearchBrowser.name;
+    bookmarkResult.profileDirectory = L"Profile 1";
     bookmarkResult.bookmark = true;
     SearchResponse bookmarkResponse;
     bookmarkResponse.results.push_back(bookmarkResult);
-    mappingServer.CacheBookmarkMappingsForTest(genericSearchBrowser, L"bm", L"git", bookmarkResponse);
+    const auto bookmarkSuggestions = mappingServer.CacheBookmarkMappingsForTest(
+        L"bm", L"git", bookmarkResponse);
     const auto bookmarkSelection = mappingServer.ResolveUri(
         L"bhl://bookmark?prefix=bm&selection=GitHub%20%20%E2%80%94%20%20github.com", mappingError);
-    Check(bookmarkSelection && bookmarkSelection->kind == ListaryActionKind::BrowserOpen &&
-        bookmarkSelection->browserResult.url == L"https://github.com/",
-        "Listary bookmark rows keep their own URL mappings");
+    Check(bookmarkSuggestions.size() == 1 && bookmarkSelection &&
+        bookmarkSelection->kind == ListaryActionKind::BrowserOpen &&
+        bookmarkSelection->browserResult.url == L"https://github.com/" &&
+        bookmarkSelection->browserResult.profileDirectory == L"Profile 1",
+        "Listary bookmark rows keep their own URL and profile mappings");
     const auto bookmarkQuerySelection = mappingServer.ResolveUri(
         L"bhl://bookmark?prefix=bm&selection=git", mappingError);
     Check(bookmarkQuerySelection && bookmarkQuerySelection->kind == ListaryActionKind::BrowserOpen &&
-        bookmarkQuerySelection->browserResult.url == L"? git",
-        "Listary bookmark raw-query row falls back to the browser omnibox");
+        bookmarkQuerySelection->browserResult.url == L"https://github.com/",
+        "Listary bookmark raw-query row opens the top bookmark result");
+
+    // Review regression: a bookmark whose display text equals the raw query
+    // must stay independently selectable from the raw-query row.
+    HistoryResult edgeBookmark;
+    edgeBookmark.title = L"example.test";
+    edgeBookmark.url = L"https://example.test/saved/deep-page";
+    edgeBookmark.browserId = L"edge";
+    edgeBookmark.browserName = L"Microsoft Edge";
+    edgeBookmark.profileDirectory = L"Profile 1";
+    edgeBookmark.bookmark = true;
+    SearchResponse sameTextResponse;
+    sameTextResponse.results.push_back(edgeBookmark);
+    const auto sameTextSuggestions = mappingServer.CacheBookmarkMappingsForTest(
+        L"bm2", L"example.test", sameTextResponse);
+    Check(sameTextSuggestions.size() == 1 &&
+        sameTextSuggestions.front() == L"example.test · 书签",
+        "bookmark display equal to the query gets a distinct marker suffix");
+    const auto markedSelection = mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm2&selection=example.test%20%C2%B7%20%E4%B9%A6%E7%AD%BE", mappingError);
+    const auto rawRowSelection = mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm2&selection=example.test", mappingError);
+    Check(markedSelection && markedSelection->browserResult.url == L"https://example.test/saved/deep-page" &&
+        markedSelection->browserResult.browserId == L"edge" &&
+        markedSelection->browserResult.profileDirectory == L"Profile 1",
+        "bookmark row named like the query keeps its own URL, browser and profile");
+    Check(rawRowSelection && rawRowSelection->browserResult.url == L"https://example.test/saved/deep-page" &&
+        rawRowSelection->browserResult.browserId == L"edge",
+        "raw-query row resolves independently without overwriting the bookmark");
+
+    // Review regression: literal "(2)"-style bookmark names must not collide
+    // with generated duplicate numbering; every suggestion stays unique.
+    auto makeDocs = [](const wchar_t* title, const wchar_t* url) {
+        HistoryResult item;
+        item.title = title;
+        item.url = url;
+        item.browserId = L"edge";
+        item.browserName = L"Microsoft Edge";
+        item.bookmark = true;
+        return item;
+    };
+    SearchResponse numberedResponse;
+    numberedResponse.results.push_back(makeDocs(L"Docs", L"about:blank#0"));
+    numberedResponse.results.push_back(makeDocs(L"Docs", L"about:blank#1"));
+    numberedResponse.results.push_back(makeDocs(L"Docs (2)", L"about:blank#2"));
+    const auto numberedSuggestions = mappingServer.CacheBookmarkMappingsForTest(
+        L"bm3", L"docs", numberedResponse);
+    Check(numberedSuggestions.size() == 3 &&
+        numberedSuggestions[0] == L"Docs" && numberedSuggestions[1] == L"Docs (2)" &&
+        numberedSuggestions[2] == L"Docs (2) (2)",
+        "generated numbering never shadows a literal numbered bookmark name");
+    bool numberedMappingsIndependent = true;
+    const wchar_t* numberedSelections[] = {L"Docs", L"Docs (2)", L"Docs (2) (2)"};
+    const wchar_t* numberedUrls[] = {L"about:blank#0", L"about:blank#1", L"about:blank#2"};
+    for (std::size_t i = 0; i < 3; ++i) {
+        const auto selection = mappingServer.ResolveUri(
+            std::wstring(L"bhl://bookmark?prefix=bm3&selection=") + numberedSelections[i], mappingError);
+        numberedMappingsIndependent = numberedMappingsIndependent && selection &&
+            selection->kind == ListaryActionKind::BrowserOpen &&
+            selection->browserResult.url == numberedUrls[i];
+    }
+    Check(numberedMappingsIndependent,
+        "each uniquely numbered bookmark resolves back to its own URL");
+    // Same input in a different order must still produce unique, independent rows.
+    SearchResponse reorderedResponse;
+    reorderedResponse.results.push_back(makeDocs(L"Docs (2)", L"about:blank#2"));
+    reorderedResponse.results.push_back(makeDocs(L"Docs", L"about:blank#0"));
+    reorderedResponse.results.push_back(makeDocs(L"Docs", L"about:blank#1"));
+    const auto reorderedSuggestions = mappingServer.CacheBookmarkMappingsForTest(
+        L"bm4", L"docs", reorderedResponse);
+    Check(reorderedSuggestions.size() == 3 &&
+        std::set<std::wstring>(reorderedSuggestions.begin(), reorderedSuggestions.end()).size() == 3,
+        "bookmark suggestion texts stay unique regardless of result order");
+    bool reorderedMappingsIndependent = true;
+    const wchar_t* reorderedPairs[][2] = {
+        {L"Docs (2)", L"about:blank#2"}, {L"Docs", L"about:blank#0"}, {L"Docs (3)", L"about:blank#1"}};
+    for (const auto& pair : reorderedPairs) {
+        const auto selection = mappingServer.ResolveUri(
+            std::wstring(L"bhl://bookmark?prefix=bm4&selection=") + pair[0], mappingError);
+        reorderedMappingsIndependent = reorderedMappingsIndependent && selection &&
+            selection->browserResult.url == pair[1];
+    }
+    Check(reorderedMappingsIndependent,
+        "each reordered bookmark still resolves back to its own URL");
 
     const std::filesystem::path ini = argc > 1 ? argv[1] : L"BrowserHistoryLauncher.ini";
     std::wstring warning;
@@ -716,6 +803,35 @@ int wmain(int argc, wchar_t** argv) {
     const auto brokenBookmarkResult = bookmarkAdapter.Search(testBrowser, brokenBookmarks, L"x", 20);
     Check(!brokenBookmarkResult.error.empty() && brokenBookmarkResult.results.empty(),
         "malformed bookmark file fails safely with an error");
+
+    // Resource baseline: a large bookmark store must still answer bounded
+    // queries quickly and stay stable across repeated queries.
+    {
+        std::string large;
+        large.reserve(2 * 1024 * 1024);
+        large += "{\"roots\":{\"bookmark_bar\":{\"children\":[";
+        for (int i = 0; i < 5000; ++i) {
+            if (i) large += ',';
+            large += "{\"date_added\":\"13" + std::to_string(30000000000000000LL + i) +
+                "\",\"name\":\"Site " + std::to_string(i) + " needle\",\"type\":\"url\",\"url\":\"https://s" +
+                std::to_string(i) + ".example/x\"}";
+        }
+        large += "],\"type\":\"folder\"}},\"version\":1}";
+        const auto largeProfile = tempRoot / L"Large" / L"Bookmarks";
+        std::filesystem::create_directories(largeProfile.parent_path(), ignored);
+        Check(WriteUtf8File(largeProfile, large), "create 5k-entry bookmark file");
+        BrowserProfile largeBrowserProfile{testBrowser.id, L"Large", L"Large", tempRoot, largeProfile};
+        const auto largeStarted = std::chrono::steady_clock::now();
+        const auto largeSearch = bookmarkAdapter.Search(testBrowser, largeBrowserProfile, L"needle", 20);
+        const auto largeElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - largeStarted).count();
+        Check(largeSearch.error.empty() && largeSearch.results.size() == 20,
+            "large bookmark store caps results at the limit");
+        const auto largeAgain = bookmarkAdapter.Search(testBrowser, largeBrowserProfile, L"needle", 20);
+        Check(largeAgain.error.empty() && largeAgain.results.size() == 20,
+            "repeated large bookmark queries stay stable");
+        std::cout << "METRIC synthetic_5k_bookmarks_query_us=" << largeElapsed << '\n';
+    }
 
     for (const auto& liveBrowser : config.browsers) {
         if (!liveBrowser.enabled || (liveBrowser.id != L"chrome" && liveBrowser.id != L"edge")) continue;
