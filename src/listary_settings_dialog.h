@@ -12,6 +12,7 @@ struct ListarySettingsResult {
     std::vector<BrowserDefinition> browsers;
     BluetoothConfig bluetooth;
     AppTerminationConfig appTermination;
+    BookmarkConfig bookmarks;
 };
 
 class ListarySettingsDialog {

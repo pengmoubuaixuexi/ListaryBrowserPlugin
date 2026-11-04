@@ -177,6 +177,11 @@ AppConfig ConfigStore::Load(const std::filesystem::path& iniPath, std::wstring& 
     config.appTermination.enabled = ReadBool(iniPath, L"applications", L"Enabled", false);
     config.appTermination.keyword = ToLowerInvariant(
         ReadValue(iniPath, L"applications", L"Keyword", L"end"));
+    // Same opt-in rule for the bookmark module: an INI written before this
+    // feature must not silently register a new Listary keyword.
+    config.bookmarks.enabled = ReadBool(iniPath, L"bookmarks", L"Enabled", false);
+    config.bookmarks.keyword = ToLowerInvariant(
+        ReadValue(iniPath, L"bookmarks", L"Keyword", L"bm"));
 
     const auto sections = EnumerateBrowserSections(iniPath);
     if (sections.empty()) {
@@ -272,12 +277,23 @@ bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
     std::wstring& error) {
     std::wstring warning;
     const auto existing = Load(iniPath, warning);
-    return SaveListarySettings(iniPath, browsers, bluetooth, existing.appTermination, error);
+    return SaveListarySettings(iniPath, browsers, bluetooth, existing.appTermination,
+        existing.bookmarks, error);
 }
 
 bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
     const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
     const AppTerminationConfig& appTermination, std::wstring& error) {
+    std::wstring warning;
+    const auto existing = Load(iniPath, warning);
+    return SaveListarySettings(iniPath, browsers, bluetooth, appTermination,
+        existing.bookmarks, error);
+}
+
+bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
+    const std::vector<BrowserDefinition>& browsers, const BluetoothConfig& bluetooth,
+    const AppTerminationConfig& appTermination, const BookmarkConfig& bookmarks,
+    std::wstring& error) {
     std::wstring warning;
     auto candidate = Load(iniPath, warning);
     if (!std::filesystem::exists(iniPath)) candidate.browsers.clear();
@@ -289,6 +305,7 @@ bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
     }
     candidate.bluetooth = bluetooth;
     candidate.appTermination = appTermination;
+    candidate.bookmarks = bookmarks;
     if (!Validate(candidate, error)) return false;
 
     const auto temporaryPath = std::filesystem::path(iniPath.wstring() + L".bhl-tmp");
@@ -328,6 +345,14 @@ bool ConfigStore::SaveListarySettings(const std::filesystem::path& iniPath,
         std::filesystem::remove(temporaryPath, fileError);
         return false;
     }
+    if (!WritePrivateProfileStringW(L"bookmarks", L"Enabled",
+            bookmarks.enabled ? L"true" : L"false", temporaryPath.c_str()) ||
+        !WritePrivateProfileStringW(L"bookmarks", L"Keyword",
+            bookmarks.keyword.c_str(), temporaryPath.c_str())) {
+        error = L"无法写入书签配置：" + temporaryPath.wstring() + L"。";
+        std::filesystem::remove(temporaryPath, fileError);
+        return false;
+    }
     WritePrivateProfileStringW(nullptr, nullptr, nullptr, temporaryPath.c_str());
     if (!MoveFileExW(temporaryPath.c_str(), iniPath.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -358,6 +383,18 @@ bool ConfigStore::Validate(const AppConfig& config, std::wstring& error) {
         if (keyword.empty() || keyword.size() > 16 || keyword.find_first_not_of(
                 L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::wstring::npos) {
             error = L"强制结束应用关键字应为 1–16 个字母、数字、- 或 _。";
+            return false;
+        }
+        if (!prefixes.insert(ToLowerInvariant(keyword)).second) {
+            error = L"Listary 关键字冲突：" + keyword;
+            return false;
+        }
+    }
+    if (config.bookmarks.enabled) {
+        const auto& keyword = config.bookmarks.keyword;
+        if (keyword.empty() || keyword.size() > 16 || keyword.find_first_not_of(
+                L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::wstring::npos) {
+            error = L"书签关键字应为 1–16 个字母、数字、- 或 _。";
             return false;
         }
         if (!prefixes.insert(ToLowerInvariant(keyword)).second) {

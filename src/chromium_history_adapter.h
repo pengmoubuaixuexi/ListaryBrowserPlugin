@@ -31,6 +31,12 @@ public:
     AdapterSearchResult Search(const BrowserDefinition& browser, const BrowserProfile& profile,
         std::wstring_view query, std::size_t limit) override;
 
+    // Shared Chromium profile discovery: returns profiles whose directory
+    // contains the required file (History, Bookmarks, ...). Other adapters
+    // reuse this instead of duplicating Local State parsing.
+    static std::vector<BrowserProfile> DiscoverProfilesForFile(const BrowserDefinition& browser,
+        const std::wstring& requiredFileName);
+
 private:
     static std::vector<std::wstring> ReadLocalStateProfiles(const std::filesystem::path& userDataRoot);
     static AdapterSearchResult SearchDatabase(const BrowserDefinition& browser,

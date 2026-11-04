@@ -28,10 +28,12 @@ constexpr int kBluetoothEnabledId = 1101;
 constexpr int kBluetoothKeywordId = 1102;
 constexpr int kAppTerminationEnabledId = 1201;
 constexpr int kAppTerminationKeywordId = 1202;
+constexpr int kBookmarkEnabledId = 1301;
+constexpr int kBookmarkKeywordId = 1302;
 constexpr int kApplyId = IDOK;
 
 constexpr int kClientWidth = 680;
-constexpr int kClientHeight = 651;
+constexpr int kClientHeight = 727;
 
 std::wstring ControlText(HWND control) {
     const int length = GetWindowTextLengthW(control);
@@ -54,7 +56,7 @@ public:
     DialogState(HINSTANCE instance, HWND owner, const AppConfig& config,
         std::wstring_view)
         : instance_(instance), owner_(owner), bluetooth_(config.bluetooth),
-          appTermination_(config.appTermination) {
+          appTermination_(config.appTermination), bookmarks_(config.bookmarks) {
         for (const auto& browser : config.browsers) {
             const auto executable = BrowserLauncher::FindExecutable(browser);
             if (executable.empty() && !browser.enabled) continue;
@@ -195,6 +197,7 @@ private:
         if (listarySection_) SendMessageW(listarySection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
         if (bluetoothSection_) SendMessageW(bluetoothSection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
         if (appTerminationSection_) SendMessageW(appTerminationSection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
+        if (bookmarkSection_) SendMessageW(bookmarkSection_, WM_SETFONT, reinterpret_cast<WPARAM>(sectionFont_), TRUE);
         for (HWND control : mutedControls_) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(smallFont_), TRUE);
         }
@@ -236,9 +239,16 @@ private:
         Move(appTerminationKeywordLabel_, 432, 532, 70, 26);
         Move(appTerminationKeywordEdit_, 510, 526, 142, 31);
         Move(appTerminationKeywordHint_, 150, 562, 502, 24);
-        Move(bottomSeparator_, 28, 594, 624, 2);
-        Move(applyButton_, 440, 607, 112, 32);
-        Move(cancelButton_, 562, 607, 90, 32);
+        Move(bookmarkSeparator_, 28, 594, 624, 2);
+
+        Move(bookmarkSection_, 28, 608, 120, 24);
+        Move(bookmarkEnabledCheck_, 150, 604, 266, 28);
+        Move(bookmarkKeywordLabel_, 432, 608, 70, 26);
+        Move(bookmarkKeywordEdit_, 510, 602, 142, 31);
+        Move(bookmarkKeywordHint_, 150, 638, 502, 24);
+        Move(bottomSeparator_, 28, 670, 624, 2);
+        Move(applyButton_, 440, 683, 112, 32);
+        Move(cancelButton_, 562, 683, 90, 32);
     }
 
     void CenterAndShow() const {
@@ -297,7 +307,7 @@ private:
         CreateFonts();
         titleLabel_ = AddControl(L"STATIC", L"配置 Listary 插件", SS_LEFT);
         subtitleLabel_ = AddControl(L"STATIC",
-            L"配置浏览器搜索、蓝牙连接和强制结束应用；最后统一保存并只重启一次 Listary。",
+            L"配置浏览器搜索、蓝牙连接、强制结束应用和浏览器书签；最后统一保存并只重启一次 Listary。",
             SS_LEFT);
         topSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
@@ -343,6 +353,16 @@ private:
             kAppTerminationKeywordId, WS_EX_CLIENTEDGE);
         appTerminationKeywordHint_ = AddControl(L"STATIC",
             L"例如 end；选中后需再次确认，未保存内容可能丢失", SS_LEFT);
+        bookmarkSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
+
+        bookmarkSection_ = AddControl(L"STATIC", L"浏览器书签", SS_LEFT);
+        bookmarkEnabledCheck_ = AddControl(L"BUTTON", L"启用浏览器书签搜索",
+            BS_AUTOCHECKBOX | WS_TABSTOP, kBookmarkEnabledId);
+        bookmarkKeywordLabel_ = AddControl(L"STATIC", L"关键字", SS_LEFT);
+        bookmarkKeywordEdit_ = AddControl(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP,
+            kBookmarkKeywordId, WS_EX_CLIENTEDGE);
+        bookmarkKeywordHint_ = AddControl(L"STATIC",
+            L"例如 bm；在所有已启用浏览器中搜索书签，结果由来源浏览器打开", SS_LEFT);
         bottomSeparator_ = AddControl(L"STATIC", L"", SS_ETCHEDHORZ);
 
         applyButton_ = AddControl(L"BUTTON", L"保存并应用全部", BS_DEFPUSHBUTTON | WS_TABSTOP, kApplyId);
@@ -351,12 +371,13 @@ private:
         if (!titleLabel_ || !subtitleLabel_ || !browserCombo_ || !enabledCheck_ ||
             !keywordEdit_ || !iconEdit_ || !pathLabel_ || !bluetoothEnabledCheck_ ||
             !bluetoothKeywordEdit_ || !appTerminationEnabledCheck_ ||
-            !appTerminationKeywordEdit_ || !applyButton_ || !cancelButton_) {
+            !appTerminationKeywordEdit_ || !bookmarkEnabledCheck_ || !bookmarkKeywordEdit_ ||
+            !applyButton_ || !cancelButton_) {
             return false;
         }
 
         mutedControls_ = {subtitleLabel_, browserSummary_, pathLabel_, keywordHint_, updateHint_,
-            bluetoothKeywordHint_, appTerminationKeywordHint_};
+            bluetoothKeywordHint_, appTerminationKeywordHint_, bookmarkKeywordHint_};
         CreateFonts();
         LayoutControls();
         SendMessageW(browserCombo_, CB_SETMINVISIBLE, 8, 0);
@@ -396,6 +417,9 @@ private:
         Button_SetCheck(appTerminationEnabledCheck_, appTermination_.enabled ? BST_CHECKED : BST_UNCHECKED);
         SetWindowTextW(appTerminationKeywordEdit_, appTermination_.keyword.c_str());
         UpdateAppTerminationControls();
+        Button_SetCheck(bookmarkEnabledCheck_, bookmarks_.enabled ? BST_CHECKED : BST_UNCHECKED);
+        SetWindowTextW(bookmarkKeywordEdit_, bookmarks_.keyword.c_str());
+        UpdateBookmarkControls();
         SetFocus(browsers_.empty() ? bluetoothEnabledCheck_ : browserCombo_);
         return true;
     }
@@ -493,6 +517,23 @@ private:
         return true;
     }
 
+    void UpdateBookmarkControls() const {
+        const BOOL enabled = Button_GetCheck(bookmarkEnabledCheck_) == BST_CHECKED;
+        EnableWindow(bookmarkKeywordEdit_, enabled);
+    }
+
+    bool SaveBookmarkDraft() {
+        bookmarks_.enabled = Button_GetCheck(bookmarkEnabledCheck_) == BST_CHECKED;
+        bookmarks_.keyword = ToLowerInvariant(Trim(ControlText(bookmarkKeywordEdit_)));
+        if (bookmarks_.enabled && !ValidKeyword(bookmarks_.keyword)) {
+            MessageBoxW(window_, L"书签搜索关键字应为 1–16 个字母、数字、- 或 _。",
+                L"配置 Listary", MB_OK | MB_ICONWARNING);
+            SetFocus(bookmarkKeywordEdit_);
+            return false;
+        }
+        return true;
+    }
+
     bool ValidateKeywordConflicts() {
         std::set<std::wstring> keywords;
         if (bluetooth_.enabled) keywords.insert(bluetooth_.keyword);
@@ -500,6 +541,12 @@ private:
             MessageBoxW(window_, L"强制结束应用关键字不能与蓝牙关键字重复。",
                 L"配置 Listary", MB_OK | MB_ICONWARNING);
             SetFocus(appTerminationKeywordEdit_);
+            return false;
+        }
+        if (bookmarks_.enabled && !keywords.insert(bookmarks_.keyword).second) {
+            MessageBoxW(window_, L"书签关键字不能与蓝牙或强制结束应用关键字重复。",
+                L"配置 Listary", MB_OK | MB_ICONWARNING);
+            SetFocus(bookmarkKeywordEdit_);
             return false;
         }
         for (std::size_t index = 0; index < browsers_.size(); ++index) {
@@ -540,7 +587,7 @@ private:
 
     void Apply() {
         SaveCurrentDraft();
-        if (!SaveBluetoothDraft() || !SaveAppTerminationDraft()) return;
+        if (!SaveBluetoothDraft() || !SaveAppTerminationDraft() || !SaveBookmarkDraft()) return;
         for (std::size_t index = 0; index < browsers_.size(); ++index) {
             const auto& browser = browsers_[index];
             if (!ValidKeyword(browser.prefix)) {
@@ -572,7 +619,7 @@ private:
             }
         }
         if (!ValidateKeywordConflicts()) return;
-        result_ = ListarySettingsResult{browsers_, bluetooth_, appTermination_};
+        result_ = ListarySettingsResult{browsers_, bluetooth_, appTermination_, bookmarks_};
         DestroyWindow(window_);
     }
 
@@ -588,6 +635,7 @@ private:
         else if (id == kBrowseId && notification == BN_CLICKED) BrowseIcon();
         else if (id == kBluetoothEnabledId && notification == BN_CLICKED) UpdateBluetoothControls();
         else if (id == kAppTerminationEnabledId && notification == BN_CLICKED) UpdateAppTerminationControls();
+        else if (id == kBookmarkEnabledId && notification == BN_CLICKED) UpdateBookmarkControls();
         else if (id == kApplyId && notification == BN_CLICKED) Apply();
         else if (id == IDCANCEL && notification == BN_CLICKED) DestroyWindow(window_);
         return 0;
@@ -633,6 +681,12 @@ private:
     HWND appTerminationKeywordLabel_{};
     HWND appTerminationKeywordEdit_{};
     HWND appTerminationKeywordHint_{};
+    HWND bookmarkSeparator_{};
+    HWND bookmarkSection_{};
+    HWND bookmarkEnabledCheck_{};
+    HWND bookmarkKeywordLabel_{};
+    HWND bookmarkKeywordEdit_{};
+    HWND bookmarkKeywordHint_{};
     HWND bottomSeparator_{};
     HWND applyButton_{};
     HWND cancelButton_{};
@@ -643,6 +697,7 @@ private:
     std::vector<std::filesystem::path> executables_;
     BluetoothConfig bluetooth_;
     AppTerminationConfig appTermination_;
+    BookmarkConfig bookmarks_;
     std::size_t selectedIndex_ = static_cast<std::size_t>(-1);
     std::size_t detectedCount_ = 0;
     std::optional<ListarySettingsResult> result_;

@@ -60,7 +60,7 @@ Name: "{userdesktop}\Listary浏览器插件"; Filename: "{app}\BrowserHistoryLau
 Name: "{userstartup}\Listary浏览器插件"; Filename: "{app}\BrowserHistoryLauncher.exe"; WorkingDir: "{app}"; Tasks: autostart
 
 [Run]
-Filename: "{app}\BrowserHistoryLauncher.exe"; Parameters: "--settings"; Description: "启动并配置插件（升级后可启用 end 强制结束应用）"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\BrowserHistoryLauncher.exe"; Parameters: "--settings"; Description: "启动并配置插件（升级后可启用 end 强制结束应用和 bm 书签检索）"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: files; Name: "{app}\ListaryIntegrationState.ini"

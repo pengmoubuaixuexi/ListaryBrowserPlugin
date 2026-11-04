@@ -2,6 +2,7 @@
 #include "app_termination_tests.h"
 #include "browser_icon.h"
 #include "browser_launcher.h"
+#include "chromium_bookmark_adapter.h"
 #include "chromium_history_adapter.h"
 #include "config_store.h"
 #include "json_document.h"
@@ -212,6 +213,25 @@ int wmain(int argc, wchar_t** argv) {
     Check(bluetoothSelection && bluetoothSelection->kind == ListaryActionKind::BluetoothConnect &&
         bluetoothSelection->bluetoothTarget.stableKey == bluetoothTarget.stableKey,
         "Listary Bluetooth suggestion maps to an internal device target");
+    HistoryResult bookmarkResult;
+    bookmarkResult.title = L"GitHub";
+    bookmarkResult.url = L"https://github.com/";
+    bookmarkResult.browserId = genericSearchBrowser.id;
+    bookmarkResult.browserName = genericSearchBrowser.name;
+    bookmarkResult.bookmark = true;
+    SearchResponse bookmarkResponse;
+    bookmarkResponse.results.push_back(bookmarkResult);
+    mappingServer.CacheBookmarkMappingsForTest(genericSearchBrowser, L"bm", L"git", bookmarkResponse);
+    const auto bookmarkSelection = mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm&selection=GitHub%20%20%E2%80%94%20%20github.com", mappingError);
+    Check(bookmarkSelection && bookmarkSelection->kind == ListaryActionKind::BrowserOpen &&
+        bookmarkSelection->browserResult.url == L"https://github.com/",
+        "Listary bookmark rows keep their own URL mappings");
+    const auto bookmarkQuerySelection = mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm&selection=git", mappingError);
+    Check(bookmarkQuerySelection && bookmarkQuerySelection->kind == ListaryActionKind::BrowserOpen &&
+        bookmarkQuerySelection->browserResult.url == L"? git",
+        "Listary bookmark raw-query row falls back to the browser omnibox");
 
     const std::filesystem::path ini = argc > 1 ? argv[1] : L"BrowserHistoryLauncher.ini";
     std::wstring warning;
@@ -280,6 +300,19 @@ int wmain(int argc, wchar_t** argv) {
         appCollision.appTermination.keyword = config.browsers.front().prefix;
         appCollision.browsers.front().enabled = true;
         Check(!ConfigStore::Validate(appCollision, error), "application keyword cannot collide with a browser");
+    }
+
+    auto bookmarkCollision = config;
+    bookmarkCollision.bookmarks.enabled = true;
+    bookmarkCollision.bookmarks.keyword = bookmarkCollision.appTermination.keyword;
+    bookmarkCollision.appTermination.enabled = true;
+    Check(!ConfigStore::Validate(bookmarkCollision, error), "bookmark keyword cannot collide with end");
+    bookmarkCollision.bookmarks.keyword = L"bad key";
+    Check(!ConfigStore::Validate(bookmarkCollision, error), "invalid bookmark keyword is rejected");
+    if (!config.browsers.empty()) {
+        bookmarkCollision.bookmarks.keyword = config.browsers.front().prefix;
+        bookmarkCollision.browsers.front().enabled = true;
+        Check(!ConfigStore::Validate(bookmarkCollision, error), "bookmark keyword cannot collide with a browser");
     }
 
     const auto tempRoot = std::filesystem::temp_directory_path() /
@@ -353,6 +386,8 @@ int wmain(int argc, wchar_t** argv) {
         "Hotkey=none disables the native global hotkey");
     Check(!noHotkeyConfig.appTermination.enabled,
         "legacy INI without applications section does not reserve an existing end keyword");
+    Check(!noHotkeyConfig.bookmarks.enabled,
+        "legacy INI without bookmarks section does not register a new bm keyword");
     const auto editableIni = tempRoot / L"editable.ini";
     std::filesystem::copy_file(ini, editableIni, std::filesystem::copy_options::overwrite_existing, ignored);
     auto editableConfig = ConfigStore::Load(editableIni, warning);
@@ -415,6 +450,20 @@ int wmain(int argc, wchar_t** argv) {
     Check(!ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
         listarySettingsConfig.bluetooth, invalidAppSettings, error) && ReadFile(editableIni) == beforeInvalidSave,
         "invalid application settings cannot partially modify INI");
+    auto invalidBookmarkSettings = listarySettingsConfig.bookmarks;
+    invalidBookmarkSettings.enabled = true;
+    invalidBookmarkSettings.keyword = L"bad key";
+    Check(!ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
+        listarySettingsConfig.bluetooth, listarySettingsConfig.appTermination,
+        invalidBookmarkSettings, error) && ReadFile(editableIni) == beforeInvalidSave,
+        "invalid bookmark settings cannot partially modify INI");
+    Check(ConfigStore::SaveListarySettings(editableIni, listarySettingsConfig.browsers,
+        listarySettingsConfig.bluetooth, listarySettingsConfig.appTermination,
+        listarySettingsConfig.bookmarks, error),
+        "bookmark settings persist with the batch settings API");
+    const auto bookmarkPersisted = ConfigStore::Load(editableIni, warning);
+    Check(bookmarkPersisted.bookmarks.enabled && bookmarkPersisted.bookmarks.keyword == L"bm",
+        "bookmark enabled state and keyword round-trip");
     JsonValue jsonRoundTrip;
     std::wstring jsonError;
     Check(ParseJsonUtf8("{\"text\":\"\\u4e2d\\u6587\",\"array\":[true,false,null,-1.25e2]}",
@@ -452,19 +501,19 @@ int wmain(int argc, wchar_t** argv) {
         "Listary configuration creates a backup");
     JsonValue configuredDocument;
     Check(ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 4 && CountDisabledGoogleUpdates(configuredDocument) == 1,
-        "Listary configuration adds browser, Bluetooth and end entries and resolves built-in g conflict");
+        CountBhlInsertions(configuredDocument) == 5 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        "Listary configuration adds browser, Bluetooth, end and bookmark entries and resolves built-in g conflict");
     Check(BhlIconPath(configuredDocument, L"g") == noHotkeyIni.wstring(),
         "Listary insertion uses the configured icon path");
     const auto configuredAgain = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
     Check(configuredAgain.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 4,
+        CountBhlInsertions(configuredDocument) == 5,
         "Listary configuration is idempotent");
     auto disabledApplications = listaryConfig;
     disabledApplications.appTermination.enabled = false;
     const auto disabledApplicationsResult = ListaryConfigurator::Configure(disabledApplications, listaryPreferences, listaryState);
     Check(disabledApplicationsResult.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 3 && ReadFile(listaryPreferences).find("bhl://end?") == std::string::npos,
+        CountBhlInsertions(configuredDocument) == 4 && ReadFile(listaryPreferences).find("bhl://end?") == std::string::npos,
         "disabling end removes only its managed Listary entry");
     auto renamedApplications = listaryConfig;
     renamedApplications.appTermination.keyword = L"quit";
@@ -474,23 +523,31 @@ int wmain(int argc, wchar_t** argv) {
         "changing application keyword removes the obsolete entry");
     Check(ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState).ok,
         "application keyword can be restored after rename");
+    auto disabledBookmarks = listaryConfig;
+    disabledBookmarks.bookmarks.enabled = false;
+    const auto disabledBookmarksResult = ListaryConfigurator::Configure(disabledBookmarks, listaryPreferences, listaryState);
+    Check(disabledBookmarksResult.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
+        CountBhlInsertions(configuredDocument) == 4 && ReadFile(listaryPreferences).find("bhl://bookmark?") == std::string::npos,
+        "disabling bookmarks removes only its managed Listary entry");
+    Check(ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState).ok,
+        "bookmark entry can be restored after disable");
     const auto configuredEdgeOnly = ListaryConfigurator::ConfigureBrowser(
         listaryEdge, L"e", listaryPreferences, listaryState);
     Check(configuredEdgeOnly.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 3 && !BhlIconPath(configuredDocument, L"e").empty() &&
+        CountBhlInsertions(configuredDocument) == 4 && !BhlIconPath(configuredDocument, L"e").empty() &&
         CountDisabledGoogleUpdates(configuredDocument) == 0,
         "first per-browser configuration migrates old bulk entries to selected browser only");
     const auto configuredChromeAlso = ListaryConfigurator::ConfigureBrowser(
         listaryChrome, L"g", listaryPreferences, listaryState);
     Check(configuredChromeAlso.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 4 && CountDisabledGoogleUpdates(configuredDocument) == 1,
+        CountBhlInsertions(configuredDocument) == 5 && CountDisabledGoogleUpdates(configuredDocument) == 1,
         "later per-browser configuration preserves previously selected browsers");
     auto disabledEdge = listaryEdge;
     disabledEdge.enabled = false;
     const auto removedEdge = ListaryConfigurator::ConfigureBrowser(
         disabledEdge, L"e", listaryPreferences, listaryState);
     Check(removedEdge.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
-        CountBhlInsertions(configuredDocument) == 3 && BhlIconPath(configuredDocument, L"e").empty(),
+        CountBhlInsertions(configuredDocument) == 4 && BhlIconPath(configuredDocument, L"e").empty(),
         "per-browser disable removes only the selected browser");
     const auto removedListary = ListaryConfigurator::Remove(listaryPreferences, listaryState);
     Check(removedListary.ok && ParseJsonUtf8(ReadFile(listaryPreferences), configuredDocument, jsonError) &&
@@ -510,6 +567,12 @@ int wmain(int argc, wchar_t** argv) {
     const auto conflictingApplications = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
     Check(!conflictingApplications.ok && ReadFile(listaryPreferences) == appConflictSample,
         "end registration never overwrites another custom Listary action");
+    const std::string bookmarkConflictSample =
+        "{\"WebSearch\":{\"Items\":{\"Insertions\":[{\"Item\":{\"Keyword\":\"bm\",\"Url\":\"https://other.test/{query}\"}}],\"Updates\":[]}}}";
+    Check(WriteUtf8File(listaryPreferences, bookmarkConflictSample), "create external bm keyword conflict");
+    const auto conflictingBookmarks = ListaryConfigurator::Configure(listaryConfig, listaryPreferences, listaryState);
+    Check(!conflictingBookmarks.ok && ReadFile(listaryPreferences) == bookmarkConflictSample,
+        "bookmark registration never overwrites another custom Listary action");
     {
         std::ofstream state(tempRoot / L"Local State", std::ios::binary);
         state << "{\"profile\":{\"info_cache\":{\"Default\":{},\"Profile 1\":{}}}}";
@@ -604,6 +667,55 @@ int wmain(int argc, wchar_t** argv) {
     BrowserProfile broken{testBrowser.id, L"Broken", L"Broken", tempRoot, brokenHistory};
     const auto brokenResult = adapter.Search(testBrowser, broken, L"x", 20);
     Check(brokenResult.schemaIncompatible && brokenResult.results.empty(), "missing required fields fails safely");
+
+    ChromiumBookmarkAdapter bookmarkAdapter;
+    const std::string bookmarksJson =
+        "{\"checksum\":\"x\",\"version\":1,\"roots\":{"
+        "\"bookmark_bar\":{\"children\":["
+        "{\"date_added\":\"13388000000000000\",\"name\":\"GitHub 主页\",\"type\":\"url\",\"url\":\"https://github.com/\"},"
+        "{\"children\":["
+        "{\"date_added\":\"13389000000000001\",\"name\":\"中文 Needle 书签\",\"type\":\"url\",\"url\":\"https://example.test/中文/needle\"},"
+        "{\"date_added\":\"13389000000000002\",\"name\":\"needle 前缀站点\",\"type\":\"url\",\"url\":\"https://prefix.example/x\"}"
+        "],\"date_added\":\"13387000000000000\",\"name\":\"工作文件夹\",\"type\":\"folder\"}"
+        "],\"name\":\"书签栏\",\"type\":\"folder\"},"
+        "\"other\":{\"children\":["
+        "{\"date_added\":\"13389500000000003\",\"name\":\"Needle\",\"type\":\"url\",\"url\":\"https://other.example/a\"},"
+        "{\"date_added\":\"13386500000000004\",\"name\":\"无关名字\",\"type\":\"url\",\"url\":\"https://needle-url.example/y\"}"
+        "],\"name\":\"其他书签\",\"type\":\"folder\"}}}";
+    Check(WriteUtf8File(tempRoot / L"Default" / L"Bookmarks", bookmarksJson) &&
+        WriteUtf8File(tempRoot / L"Profile 1" / L"Bookmarks", bookmarksJson),
+        "create synthetic Chromium bookmark files");
+    const auto bookmarkProfiles = bookmarkAdapter.DiscoverProfiles(testBrowser);
+    Check(bookmarkProfiles.size() == 2, "bookmark adapter discovers the same Local State profiles");
+    if (!bookmarkProfiles.empty()) {
+        const auto& defaultBookmarkProfile = bookmarkProfiles.front();
+        const auto needleSearch = bookmarkAdapter.Search(testBrowser, defaultBookmarkProfile, L"needle", 20);
+        Check(needleSearch.error.empty() && needleSearch.results.size() == 4,
+            "bookmark search matches title exact/prefix/contains and URL contains");
+        const std::vector<std::wstring> expectedOrder = {
+            L"Needle", L"needle 前缀站点", L"中文 Needle 书签", L"无关名字"};
+        bool orderMatches = needleSearch.results.size() == expectedOrder.size();
+        for (std::size_t i = 0; orderMatches && i < expectedOrder.size(); ++i) {
+            orderMatches = needleSearch.results[i].title == expectedOrder[i] &&
+                needleSearch.results[i].bookmark;
+        }
+        Check(orderMatches && needleSearch.results.front().lastVisitTime == 13389500000000003LL,
+            "bookmark results are ranked by relevance tiers then date added");
+        const auto upperSearch = bookmarkAdapter.Search(testBrowser, defaultBookmarkProfile, L"NEEDLE", 20);
+        Check(upperSearch.error.empty() && upperSearch.results.size() == 4,
+            "bookmark matching is case-insensitive");
+        const auto recentBookmarks = bookmarkAdapter.Search(testBrowser, defaultBookmarkProfile, L"", 3);
+        Check(recentBookmarks.error.empty() && recentBookmarks.results.size() == 3 &&
+            recentBookmarks.results.front().title == L"Needle",
+            "empty bookmark query lists most recently added entries");
+    }
+    Check(WriteUtf8File(tempRoot / L"Broken" / L"Bookmarks", "{ not json"),
+        "create malformed bookmark file");
+    BrowserProfile brokenBookmarks{testBrowser.id, L"Broken", L"Broken", tempRoot,
+        tempRoot / L"Broken" / L"Bookmarks"};
+    const auto brokenBookmarkResult = bookmarkAdapter.Search(testBrowser, brokenBookmarks, L"x", 20);
+    Check(!brokenBookmarkResult.error.empty() && brokenBookmarkResult.results.empty(),
+        "malformed bookmark file fails safely with an error");
 
     for (const auto& liveBrowser : config.browsers) {
         if (!liveBrowser.enabled || (liveBrowser.id != L"chrome" && liveBrowser.id != L"edge")) continue;

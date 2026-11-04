@@ -1,5 +1,6 @@
 #pragma once
 
+#include "chromium_bookmark_adapter.h"
 #include "chromium_history_adapter.h"
 #include "model.h"
 
@@ -10,29 +11,41 @@
 #include <optional>
 #include <thread>
 
+enum class SearchKind {
+    History,
+    Bookmarks
+};
+
 class HistorySearchService {
 public:
     using Completion = std::function<void(SearchResponse&&)>;
 
-    HistorySearchService(ChromiumHistoryAdapter& adapter, SnapshotManager& snapshots, Completion completion);
+    HistorySearchService(ChromiumHistoryAdapter& adapter, ChromiumBookmarkAdapter& bookmarkAdapter,
+        SnapshotManager& snapshots, Completion completion);
     ~HistorySearchService();
 
-    void Submit(const BrowserDefinition& browser, std::wstring query,
-        std::size_t limit, std::uint64_t generation);
+    // History requests carry exactly one browser; bookmark requests carry
+    // every enabled browser and merge their profiles into one result list.
+    void Submit(std::vector<BrowserDefinition> browsers, std::wstring query,
+        std::size_t limit, std::uint64_t generation, SearchKind kind);
     void CancelAndCleanup(std::uint64_t generation);
 
 private:
     struct Request {
-        BrowserDefinition browser;
+        std::vector<BrowserDefinition> browsers;
         std::wstring query;
         std::size_t limit = 20;
         std::uint64_t generation = 0;
+        SearchKind kind = SearchKind::History;
     };
 
     void WorkerLoop();
     SearchResponse Execute(const Request& request);
+    SearchResponse ExecuteHistory(const Request& request);
+    SearchResponse ExecuteBookmarks(const Request& request);
 
     ChromiumHistoryAdapter& adapter_;
+    ChromiumBookmarkAdapter& bookmarkAdapter_;
     SnapshotManager& snapshots_;
     Completion completion_;
     std::thread worker_;
