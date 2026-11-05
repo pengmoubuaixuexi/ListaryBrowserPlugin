@@ -46,6 +46,7 @@ Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\LISTARY_INTEGRATION.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\RESOURCE_REPORT.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\EXE_TEST_2026-10-17.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "..\docs\BOOKMARK_TEST_2026-11-05.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\bhl"; ValueType: string; ValueName: ""; ValueData: "URL:Browser History Launcher"; Flags: uninsdeletekey

@@ -320,6 +320,48 @@ int wmain(int argc, wchar_t** argv) {
     Check(reorderedMappingsIndependent,
         "each reordered bookmark still resolves back to its own URL");
 
+    // A refresh replaces both the raw-query action and the old visible rows,
+    // even when a deleted/renamed bookmark leaves no matching results.
+    const auto previousRows = mappingServer.CacheBookmarkMappingsForTest(
+        L"bm-refresh", L"needle", sameTextResponse);
+    Check(previousRows.size() == 1 && mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm-refresh&selection=needle", mappingError).has_value(),
+        "bookmark refresh regression starts with an actionable result");
+    const auto emptyRows = mappingServer.CacheBookmarkMappingsForTest(
+        L"BM-REFRESH", L"needle", SearchResponse{});
+    Check(emptyRows.empty() && !mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm-refresh&selection=needle", mappingError),
+        "empty bookmark refresh invalidates the old raw-query action case-insensitively");
+    Check(!previousRows.empty() && !mappingServer.ResolveUri(L"bhl://bookmark?prefix=bm-refresh&selection=" +
+        previousRows.front(), mappingError),
+        "empty bookmark refresh invalidates old rendered bookmark rows");
+
+    mappingServer.CacheBookmarkMappingsForTest(L"bm-refresh", L"old-query", sameTextResponse);
+    const auto replacementRows = mappingServer.CacheBookmarkMappingsForTest(
+        L"bm-refresh", L"new-query", bookmarkResponse);
+    Check(!mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm-refresh&selection=old-query", mappingError) &&
+        !mappingServer.ResolveUri(
+            L"bhl://bookmark?prefix=bm-refresh&selection=example.test", mappingError),
+        "nonempty bookmark refresh invalidates the previous query and its rows");
+    const auto replacementRaw = mappingServer.ResolveUri(
+        L"bhl://bookmark?prefix=bm-refresh&selection=new-query", mappingError);
+    const auto replacementRow = replacementRows.empty() ? std::optional<ListaryAction>{} :
+        mappingServer.ResolveUri(
+            L"bhl://bookmark?prefix=bm-refresh&selection=" + replacementRows.front(), mappingError);
+    Check(replacementRaw && replacementRow &&
+        replacementRaw->browserResult.url == bookmarkResult.url &&
+        replacementRow->browserResult.url == bookmarkResult.url &&
+        replacementRow->browserResult.profileDirectory == L"Profile 1",
+        "refreshed bookmark rows and raw query retain the new URL and source profile");
+    Check(mappingServer.ResolveUri(L"bhl://open?prefix=q&selection=百度", mappingError).has_value() &&
+        mappingServer.ResolveUri(L"bhl://bluetooth?prefix=ly&selection=air", mappingError).has_value() &&
+        mappingServer.ResolveUri(
+            L"bhl://bluetooth?prefix=ly&selection=AirPods%20%20%E2%80%94%20%20%E6%9C%AA%E8%BF%9E%E6%8E%A5",
+            mappingError).has_value() &&
+        mappingServer.ResolveUri(L"bhl://bookmark?prefix=bm2&selection=example.test", mappingError).has_value(),
+        "bookmark refresh preserves browser, Bluetooth and other bookmark prefixes");
+
     const std::filesystem::path ini = argc > 1 ? argv[1] : L"BrowserHistoryLauncher.ini";
     std::wstring warning;
     AppConfig config = ConfigStore::Load(ini, warning);

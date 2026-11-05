@@ -14,6 +14,8 @@ v2.1.0 增加 `end` 强制结束应用与蓝牙提示框焦点修复，两个功
 
 本轮测试与体积/内存记录见 [EXE 测试报告](docs/EXE_TEST_2026-10-17.md)。
 
+v2.2.0 的缓存刷新回归和多浏览器、多 Profile 资源测量见 [书签测试报告](docs/BOOKMARK_TEST_2026-11-05.md)。书签功能由 [@valuex](https://github.com/valuex) 在 [PR #2](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/pull/2) 贡献。
+
 浏览器部分仅查询 Chromium 浏览历史与各配置文件的本地 `Bookmarks` 书签文件，不搜索文件、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。书签检索通过 `bm` 关键字按需读取（随附 INI 默认启用，旧配置默认关闭）。
 
 > 这是社区开发的非官方 Listary 扩展，与 Listary 官方无隶属或背书关系。本机已验证 Listary 6.3.5.94，Listary V7 已由实际用户验证兼容。
@@ -30,14 +32,14 @@ Listary 可以快速找到文件和应用，但浏览器内部访问过的页面
 
 ## 快速开始
 
-### 安装版 v2.1.0
+### 安装版 v2.2.0
 
 1. 从项目 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest) 下载 `ListaryBrowserPlugin-Setup-x64.exe`。
 2. 完成当前用户安装；默认可选择开机启动，不需要管理员权限。
 3. 安装结束后，在自动打开的“配置 Listary”页面设置浏览器、书签、蓝牙及强制结束应用的开关与关键字，点击“保存并应用全部”。
 4. 保存后呼出 Listary：输入 `g`/`e` 搜索浏览器历史，输入 `bm` 检索浏览器书签，输入 `ly` 列出已配对蓝牙设备，输入 `end` 选择需要强制结束的应用。
 
-已有版本可直接覆盖升级，不必先卸载。沿用原 AppId 与安装目录，保留浏览器、蓝牙、快捷键配置；旧配置缺少 `end` 时需要在配置窗口启用并保存。静默安装不会打开配置窗口，可稍后从托盘进入。自行构建的安装包位于 `build\artifacts\ListaryBrowserPlugin-Setup-x64.exe`。
+已有版本可直接覆盖升级，不必先卸载。沿用原 AppId 与安装目录，保留浏览器、蓝牙、快捷键配置；旧配置缺少 `bm` 或 `end` 时需要在配置窗口启用对应模块并保存。静默安装不会打开配置窗口，可稍后从托盘进入。自行构建的安装包位于 `build\artifacts\ListaryBrowserPlugin-Setup-x64.exe`。
 
 安装器未经 Authenticode 商业证书签名，Windows 可能显示“未知发布者”。请只从本项目 Releases 页面下载，并用同一版本的 `SHA256SUMS.txt` 核对文件。
 

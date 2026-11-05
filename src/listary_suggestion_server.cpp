@@ -422,6 +422,12 @@ struct ListarySuggestionServer::Impl {
     }
 
     void HandleBookmarkSuggestion(SOCKET client, std::wstring_view prefix, std::wstring_view query) {
+        // An in-flight, failed, or empty refresh must not leave the previous
+        // query's raw row or bookmark suggestions executable.
+        {
+            std::lock_guard lock(mappingMutex);
+            RemoveBookmarkMappingsLocked(prefix);
+        }
         std::vector<BrowserDefinition> browsers;
         for (const auto& browser : config.browsers) {
             if (browser.enabled) browsers.push_back(browser);
@@ -523,9 +529,23 @@ struct ListarySuggestionServer::Impl {
         }
     }
 
+    void RemoveBookmarkMappingsLocked(std::wstring_view prefix) {
+        const std::wstring keyPrefix = ToLowerInvariant(prefix) + L"\n";
+        std::erase_if(mappings, [&](const auto& entry) {
+            return entry.first.starts_with(keyPrefix);
+        });
+        std::erase_if(mappingOrder, [this](const auto& entry) {
+            const auto found = mappings.find(entry.first);
+            return found == mappings.end() || found->second.sequence != entry.second;
+        });
+    }
+
     std::vector<std::wstring> CacheBookmarkMappings(std::wstring_view prefix,
         std::wstring_view query, const SearchResponse& completed) {
         std::lock_guard lock(mappingMutex);
+        // Replace the entire visible bookmark list, including with zero rows.
+        // Keep other module prefixes and their selection mappings intact.
+        RemoveBookmarkMappingsLocked(prefix);
         std::vector<std::wstring> suggestions;
         // Listary resolves a selection purely by its rendered text, and it
         // always renders the raw query as a selectable row. Every bookmark row
