@@ -107,6 +107,7 @@ bool IsOurInsertion(const JsonValue& insertion) {
     return StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://open?") ||
         StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://bluetooth?") ||
         StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://end?") ||
+        StartsWithInsensitive(StringProperty(*item, L"Url"), L"bhl://bookmark?") ||
         StartsWithInsensitive(StringProperty(*item, L"SuggestionUrl"), L"http://127.0.0.1:32119/suggest?");
 }
 
@@ -413,6 +414,16 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
             }
         }
     }
+    if (config.bookmarks.enabled) {
+        for (const auto& existing : insertionArray) {
+            const JsonValue* item = ItemObject(existing);
+            if (item && ToLowerInvariant(StringProperty(*item, L"Keyword")) ==
+                    ToLowerInvariant(config.bookmarks.keyword)) {
+                result.message = L"Listary 关键字已被其他自定义项目占用：" + config.bookmarks.keyword;
+                return result;
+            }
+        }
+    }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;
         for (const auto& existing : insertionArray) {
@@ -429,6 +440,9 @@ ListaryConfigurationResult ListaryConfigurator::Configure(const AppConfig& confi
     }
     if (config.appTermination.enabled) {
         insertionArray.push_back(MakePluginInsertion(config.appTermination.keyword, L"end", L"强制结束应用"));
+    }
+    if (config.bookmarks.enabled) {
+        insertionArray.push_back(MakePluginInsertion(config.bookmarks.keyword, L"bookmark", L"浏览器书签"));
     }
     for (const auto& browser : config.browsers) {
         if (!browser.enabled) continue;

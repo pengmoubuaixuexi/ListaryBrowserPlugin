@@ -1,5 +1,5 @@
 param(
-    [string]$AppVersion = '2.1.0'
+    [string]$AppVersion = '2.2.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +55,7 @@ Copy-Item -LiteralPath (Join-Path $root 'docs\RESOURCE_REPORT.md') -Destination 
 Copy-Item -LiteralPath (Join-Path $root 'docs\RESOURCE_REPORT.md') -Destination $portableDocs -Force
 Copy-Item -LiteralPath (Join-Path $root 'docs\LISTARY_INTEGRATION.md') -Destination $portableDocs -Force
 Copy-Item -LiteralPath (Join-Path $root 'docs\EXE_TEST_2026-10-17.md') -Destination $portableDocs -Force
+Copy-Item -LiteralPath (Join-Path $root 'docs\BOOKMARK_TEST_2026-11-05.md') -Destination $portableDocs -Force
 Copy-Item -LiteralPath (Join-Path $root 'scripts\configure-startup.ps1') -Destination $portableScripts -Force
 Copy-Item -LiteralPath (Join-Path $root 'scripts\setup-current-user.ps1') -Destination $portableScripts -Force
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null

@@ -6,6 +6,7 @@
 #include "app_termination.h"
 #include "bluetooth_worker.h"
 #include "browser_registry.h"
+#include "chromium_bookmark_adapter.h"
 #include "chromium_history_adapter.h"
 #include "history_search_service.h"
 #include "search_fallback.h"
@@ -362,6 +363,11 @@ struct ListarySuggestionServer::Impl {
             HandleAppSuggestion(client, *prefix, *query);
             return;
         }
+        if (config.bookmarks.enabled &&
+            ToLowerInvariant(*prefix) == ToLowerInvariant(config.bookmarks.keyword)) {
+            HandleBookmarkSuggestion(client, *prefix, *query);
+            return;
+        }
         const auto* browser = registry.FindByPrefix(*prefix);
         if (!browser) {
             const auto body = SuggestionJson(*query, SearchResponse{});
@@ -369,9 +375,23 @@ struct ListarySuggestionServer::Impl {
             return;
         }
 
+        auto completed = RunSearch({*browser}, *query, SearchKind::History);
+        if (!completed) {
+            SendResponse(client, 504, "Gateway Timeout", "application/json; charset=utf-8", "[\"\",[]]");
+            return;
+        }
+        CacheMappings(*browser, *prefix, *query, *completed);
+        const auto body = SuggestionJson(*query, *completed);
+        SendResponse(client, 200, "OK", "application/json; charset=utf-8", body);
+    }
+
+    // Runs a search request on the worker thread and waits for its response.
+    // Returns nullopt on timeout; the pending request is cancelled then.
+    std::optional<SearchResponse> RunSearch(std::vector<BrowserDefinition> browsers,
+        std::wstring_view query, SearchKind kind) {
         const auto requestedGeneration = ++generation;
         if (!searchService) {
-            searchService = std::make_unique<HistorySearchService>(adapter, snapshots,
+            searchService = std::make_unique<HistorySearchService>(adapter, bookmarkAdapter, snapshots,
                 [this](SearchResponse&& value) {
                     {
                         std::lock_guard lock(responseMutex);
@@ -384,7 +404,8 @@ struct ListarySuggestionServer::Impl {
             std::lock_guard lock(responseMutex);
             response.reset();
         }
-        searchService->Submit(*browser, *query, config.maxResults, requestedGeneration);
+        searchService->Submit(std::move(browsers), std::wstring(query), config.maxResults,
+            requestedGeneration, kind);
         std::unique_lock lock(responseMutex);
         const bool ready = responseReady.wait_for(lock, std::chrono::seconds(5), [&] {
             return stopping.load(std::memory_order_acquire) ||
@@ -393,15 +414,36 @@ struct ListarySuggestionServer::Impl {
         if (!ready || !response) {
             lock.unlock();
             searchService->CancelAndCleanup(++generation);
-            SendResponse(client, 504, "Gateway Timeout", "application/json; charset=utf-8", "[\"\",[]]");
-            return;
+            return std::nullopt;
         }
         SearchResponse completed = std::move(*response);
         response.reset();
-        lock.unlock();
-        CacheMappings(*browser, *prefix, *query, completed);
-        const auto body = SuggestionJson(*query, completed);
-        SendResponse(client, 200, "OK", "application/json; charset=utf-8", body);
+        return completed;
+    }
+
+    void HandleBookmarkSuggestion(SOCKET client, std::wstring_view prefix, std::wstring_view query) {
+        // An in-flight, failed, or empty refresh must not leave the previous
+        // query's raw row or bookmark suggestions executable.
+        {
+            std::lock_guard lock(mappingMutex);
+            RemoveBookmarkMappingsLocked(prefix);
+        }
+        std::vector<BrowserDefinition> browsers;
+        for (const auto& browser : config.browsers) {
+            if (browser.enabled) browsers.push_back(browser);
+        }
+        if (browsers.empty()) {
+            SendResponse(client, 200, "OK", "application/json; charset=utf-8",
+                SuggestionJson(query, SearchResponse{}));
+            return;
+        }
+        auto completed = RunSearch(std::move(browsers), query, SearchKind::Bookmarks);
+        if (!completed) {
+            SendResponse(client, 504, "Gateway Timeout", "application/json; charset=utf-8", "[\"\",[]]");
+            return;
+        }
+        const auto suggestions = CacheBookmarkMappings(prefix, query, *completed);
+        SendResponse(client, 200, "OK", "application/json; charset=utf-8", SuggestionJson(query, suggestions));
     }
 
     void HandleBluetoothSuggestion(SOCKET client, std::wstring_view prefix, std::wstring_view query) {
@@ -487,6 +529,59 @@ struct ListarySuggestionServer::Impl {
         }
     }
 
+    void RemoveBookmarkMappingsLocked(std::wstring_view prefix) {
+        const std::wstring keyPrefix = ToLowerInvariant(prefix) + L"\n";
+        std::erase_if(mappings, [&](const auto& entry) {
+            return entry.first.starts_with(keyPrefix);
+        });
+        std::erase_if(mappingOrder, [this](const auto& entry) {
+            const auto found = mappings.find(entry.first);
+            return found == mappings.end() || found->second.sequence != entry.second;
+        });
+    }
+
+    std::vector<std::wstring> CacheBookmarkMappings(std::wstring_view prefix,
+        std::wstring_view query, const SearchResponse& completed) {
+        std::lock_guard lock(mappingMutex);
+        // Replace the entire visible bookmark list, including with zero rows.
+        // Keep other module prefixes and their selection mappings intact.
+        RemoveBookmarkMappingsLocked(prefix);
+        std::vector<std::wstring> suggestions;
+        // Listary resolves a selection purely by its rendered text, and it
+        // always renders the raw query as a selectable row. Every bookmark row
+        // therefore needs a final display text that is unique and differs from
+        // the query, or two rows would share one mapping.
+        std::set<std::wstring> used;
+        for (const auto& result : completed.results) {
+            auto display = DisplayText(result);
+            if (display.empty()) continue;
+            // Keep the query text reserved for the raw-query row; a bookmark
+            // named exactly like the query stays selectable via a marker.
+            if (display == query) display += L" · 书签";
+            // Numbered suffixes deduplicate both repeated bookmarks and names
+            // that already contain a literal "(2)"-style suffix themselves.
+            std::wstring candidate = display;
+            unsigned attempt = 2;
+            while (candidate == query || !used.insert(candidate).second) {
+                candidate = display + L" (" + std::to_wstring(attempt++) + L")";
+            }
+            ListaryAction action;
+            action.kind = ListaryActionKind::BrowserOpen;
+            action.browserResult = result;
+            StoreMapping(MappingKey(prefix, candidate), std::move(action));
+            suggestions.push_back(std::move(candidate));
+        }
+        // The raw-query row opens the top bookmark result, mirroring the
+        // Bluetooth module; bm never routes input to an unrelated browser.
+        if (!completed.results.empty()) {
+            ListaryAction action;
+            action.kind = ListaryActionKind::BrowserOpen;
+            action.browserResult = completed.results.front();
+            StoreMapping(MappingKey(prefix, query), std::move(action));
+        }
+        return suggestions;
+    }
+
     void CacheBluetoothMappings(std::wstring_view prefix, std::wstring_view query,
         const std::vector<BluetoothDeviceTarget>& devices) {
         std::lock_guard lock(mappingMutex);
@@ -570,6 +665,7 @@ struct ListarySuggestionServer::Impl {
     BrowserRegistry registry;
     SnapshotManager snapshots;
     ChromiumHistoryAdapter adapter;
+    ChromiumBookmarkAdapter bookmarkAdapter;
     std::mutex responseMutex;
     std::condition_variable responseReady;
     std::optional<SearchResponse> response;
@@ -628,6 +724,11 @@ void ListarySuggestionServer::CacheMappingsForTest(const BrowserDefinition& brow
 void ListarySuggestionServer::CacheBluetoothMappingsForTest(std::wstring_view prefix,
     std::wstring_view query, const std::vector<BluetoothDeviceTarget>& devices) {
     impl_->CacheBluetoothMappings(prefix, query, devices);
+}
+
+std::vector<std::wstring> ListarySuggestionServer::CacheBookmarkMappingsForTest(
+    std::wstring_view prefix, std::wstring_view query, const SearchResponse& response) {
+    return impl_->CacheBookmarkMappings(prefix, query, response);
 }
 
 std::vector<std::wstring> ListarySuggestionServer::CacheAppMappingsForTest(std::wstring_view prefix,

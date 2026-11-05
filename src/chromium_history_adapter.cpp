@@ -150,6 +150,11 @@ std::vector<std::wstring> ChromiumHistoryAdapter::ReadLocalStateProfiles(
 }
 
 std::vector<BrowserProfile> ChromiumHistoryAdapter::DiscoverProfiles(const BrowserDefinition& browser) {
+    return DiscoverProfilesForFile(browser, browser.historyRelativePath.wstring());
+}
+
+std::vector<BrowserProfile> ChromiumHistoryAdapter::DiscoverProfilesForFile(
+    const BrowserDefinition& browser, const std::wstring& requiredFileName) {
     std::filesystem::path userDataRoot;
     for (const auto& candidate : browser.userDataCandidates) {
         std::error_code error;
@@ -180,10 +185,10 @@ std::vector<BrowserProfile> ChromiumHistoryAdapter::DiscoverProfiles(const Brows
             }) == browser.enabledProfiles.end()) {
             continue;
         }
-        const auto history = userDataRoot / name / browser.historyRelativePath;
+        const auto required = userDataRoot / name / requiredFileName;
         std::error_code error;
-        if (!std::filesystem::is_regular_file(history, error)) continue;
-        profiles.push_back(BrowserProfile{browser.id, name, name, userDataRoot, history});
+        if (!std::filesystem::is_regular_file(required, error)) continue;
+        profiles.push_back(BrowserProfile{browser.id, name, name, userDataRoot, required});
     }
     return profiles;
 }

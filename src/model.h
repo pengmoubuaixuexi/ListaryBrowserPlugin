@@ -58,6 +58,11 @@ struct AppTerminationConfig {
     std::wstring keyword = L"end";
 };
 
+struct BookmarkConfig {
+    bool enabled = true;
+    std::wstring keyword = L"bm";
+};
+
 struct BluetoothEnumerationResult {
     std::vector<BluetoothDeviceTarget> devices;
     std::wstring error;
@@ -89,6 +94,7 @@ struct HistoryResult {
     int visitCount = 0;
     int relevance = 0;
     bool directUrl = false;
+    bool bookmark = false;
 };
 
 struct AppConfig {
@@ -98,6 +104,7 @@ struct AppConfig {
     UINT debounceMs = 90;
     BluetoothConfig bluetooth;
     AppTerminationConfig appTermination;
+    BookmarkConfig bookmarks;
     std::vector<BrowserDefinition> browsers;
 };
 

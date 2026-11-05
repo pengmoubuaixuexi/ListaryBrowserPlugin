@@ -4,9 +4,9 @@
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C)](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin)
 
-一个 Windows 10/11 x64 原生 Listary 插件集合。程序只常驻一个轻量宿主：输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，输入 `ly` 按需列出已配对蓝牙设备，输入 `end` 选择并确认强制结束应用。浏览器结果始终由来源浏览器和 Profile 打开；蓝牙与结束应用没有独立页面，也不会后台扫描。
+一个 Windows 10/11 x64 原生 Listary 插件集合。程序只常驻一个轻量宿主：输入 `g` 查询 Chrome 历史，输入 `e` 查询 Edge 历史，输入 `bm` 检索所有已启用浏览器的书签，输入 `ly` 按需列出已配对蓝牙设备，输入 `end` 选择并确认强制结束应用。浏览器结果始终由来源浏览器和 Profile 打开；蓝牙与结束应用没有独立页面，也不会后台扫描。
 
-当前版本为 [v2.1.0](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/tag/v2.1.0)，安装器和便携 ZIP 包含浏览器历史、`ly` 蓝牙连接及 `end` 强制结束应用。v2.0.0 包含浏览器历史与蓝牙功能；v1.0.0 仅包含浏览器历史功能。
+当前版本为 [v2.2.0](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/tag/v2.2.0)，安装器和便携 ZIP 包含浏览器历史、`bm` 书签检索、`ly` 蓝牙连接及 `end` 强制结束应用。v2.1.0 增加强制结束应用；v2.0.0 包含浏览器历史与蓝牙功能；v1.0.0 仅包含浏览器历史功能。
 
 v2.1.0 增加 `end` 强制结束应用与蓝牙提示框焦点修复，两个功能已经用户实机测试通过。在 Listary 输入 `end` 或 `end 飞书`，选择明确标注“强制结束”的下拉项，确认后结束该进程。确认默认选“否”，避免连续回车误操作。此操作不是应用内正常退出，可能丢失未保存内容；不关闭同名其他进程，不保证多进程应用的全部后台组件都退出。只列当前用户/会话、具有普通可见窗口的应用（最小化窗口通常也可列出），不列仅驻托盘/无窗口应用及系统基础进程，不自动提权。
 
@@ -14,7 +14,9 @@ v2.1.0 增加 `end` 强制结束应用与蓝牙提示框焦点修复，两个功
 
 本轮测试与体积/内存记录见 [EXE 测试报告](docs/EXE_TEST_2026-10-17.md)。
 
-浏览器部分仅查询 Chromium 浏览历史，不搜索文件、书签、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。
+v2.2.0 的缓存刷新回归和多浏览器、多 Profile 资源测量见 [书签测试报告](docs/BOOKMARK_TEST_2026-11-05.md)。书签功能由 [@valuex](https://github.com/valuex) 在 [PR #2](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/pull/2) 贡献。
+
+浏览器部分仅查询 Chromium 浏览历史与各配置文件的本地 `Bookmarks` 书签文件，不搜索文件、标签页、下载、密码、Cookie 或网页内容，也不提供联网建议、遥测、账户、云同步和自动更新。书签检索通过 `bm` 关键字按需读取（随附 INI 默认启用，旧配置默认关闭）。
 
 > 这是社区开发的非官方 Listary 扩展，与 Listary 官方无隶属或背书关系。本机已验证 Listary 6.3.5.94，Listary V7 已由实际用户验证兼容。
 
@@ -30,14 +32,14 @@ Listary 可以快速找到文件和应用，但浏览器内部访问过的页面
 
 ## 快速开始
 
-### 安装版 v2.1.0
+### 安装版 v2.2.0
 
 1. 从项目 [Releases 页面](https://github.com/pengmoubuaixuexi/ListaryBrowserPlugin/releases/latest) 下载 `ListaryBrowserPlugin-Setup-x64.exe`。
 2. 完成当前用户安装；默认可选择开机启动，不需要管理员权限。
-3. 安装结束后，在自动打开的“配置 Listary”页面设置浏览器、蓝牙及强制结束应用的开关与关键字，点击“保存并应用全部”。
-4. 保存后呼出 Listary：输入 `g`/`e` 搜索浏览器历史，输入 `ly` 列出已配对蓝牙设备，输入 `end` 选择需要强制结束的应用。
+3. 安装结束后，在自动打开的“配置 Listary”页面设置浏览器、书签、蓝牙及强制结束应用的开关与关键字，点击“保存并应用全部”。
+4. 保存后呼出 Listary：输入 `g`/`e` 搜索浏览器历史，输入 `bm` 检索浏览器书签，输入 `ly` 列出已配对蓝牙设备，输入 `end` 选择需要强制结束的应用。
 
-已有版本可直接覆盖升级，不必先卸载。沿用原 AppId 与安装目录，保留浏览器、蓝牙、快捷键配置；旧配置缺少 `end` 时需要在配置窗口启用并保存。静默安装不会打开配置窗口，可稍后从托盘进入。自行构建的安装包位于 `build\artifacts\ListaryBrowserPlugin-Setup-x64.exe`。
+已有版本可直接覆盖升级，不必先卸载。沿用原 AppId 与安装目录，保留浏览器、蓝牙、快捷键配置；旧配置缺少 `bm` 或 `end` 时需要在配置窗口启用对应模块并保存。静默安装不会打开配置窗口，可稍后从托盘进入。自行构建的安装包位于 `build\artifacts\ListaryBrowserPlugin-Setup-x64.exe`。
 
 安装器未经 Authenticode 商业证书签名，Windows 可能显示“未知发布者”。请只从本项目 Releases 页面下载，并用同一版本的 `SHA256SUMS.txt` 核对文件。
 
@@ -63,7 +65,7 @@ ListaryBrowserPlugin-Setup-x64.exe
 
 1. 使用 `build\Release\BrowserHistoryLauncher.exe`，并让 `BrowserHistoryLauncher.ini` 与 EXE 位于同一目录。
 2. 启动后程序隐藏在托盘中。
-3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录；蓝牙直接在 Listary 中输入 `ly` 或 `ly air`。
+3. 按 `Ctrl+Shift+Space`，输入 `g github`、`e baidu`，或只输入 `g`/`e` 查看最近记录；书签输入 `bm` 或 `bm github`；蓝牙直接在 Listary 中输入 `ly` 或 `ly air`。
 4. 使用 `↑`/`↓` 选择，`Enter` 打开；也可单击选择、双击打开。
 5. `Esc` 隐藏并清空本次结果和会话快照。
 
@@ -102,6 +104,8 @@ Release 使用 C++20、静态 MSVC CRT 和 Windows SDK 自带 `winsqlite3.lib`�
 - `q baidu.com`：识别为地址并直接交给夸克打开，不先构造搜索引擎 URL。
 - `q 百度`：第一行以 Chromium 的 `? <搜索词>` 命令行约定交给夸克自己的地址栏搜索逻辑；下面仍可选择夸克历史匹配。
 - `e https://example.com/a`：生成一条由 Edge 直接打开的结果。
+- `bm` 或 `bm `：所有已启用浏览器最近添加的书签。
+- `bm github`：在全部已启用浏览器和配置文件中匹配书签标题与 URL，按标题精确、标题前缀、标题包含、URL 包含分级，同级按添加时间降序；选择任一行仍由该书签来源浏览器和 Profile 打开，原始输入行打开第一条书签结果（与 `ly` 蓝牙一致，不路由到其他浏览器）。
 - 未知前缀：只显示提示，不执行其他搜索。
 
 结果按标题精确匹配、标题前缀、URL 前缀、最近访问时间、`typed_count`、`visit_count` 排序，最多返回 `MaxResults` 条。数据库查询在单独工作线程执行；新请求替换待处理请求，已开始的旧请求通过代次检查被忽略。
@@ -126,6 +130,11 @@ INI 的 `[applications]` 支持：
 - `Enabled`：是否启用强制结束应用；旧 INI 缺少该节时默认关闭。
 - `Keyword`：默认 `end`，必须与浏览器和蓝牙关键字唯一。
 
+INI 的 `[bookmarks]` 支持：
+
+- `Enabled`：是否启用书签检索；旧 INI 缺少该节时默认关闭。
+- `Keyword`：默认 `bm`，必须与浏览器、蓝牙和强制结束应用关键字唯一。
+
 每个 `[browser.<id>]` 描述一个 Chromium 浏览器：
 
 - `Name`：显示名称。
@@ -143,8 +152,9 @@ INI 的 `[applications]` 支持：
 
 ## 数据读取和隐私
 
-- 只打开每个配置文件的 `History`，不访问其他浏览器数据库。
+- 只读取每个配置文件的 `History` 与 `Bookmarks`，不访问其他浏览器数据库。
 - 优先直接以 SQLite 只读模式查询；数据库忙时创建会话级临时快照。
+- 书签 JSON 按需一次性读取（上限 16 MiB），损坏或超限时安全报错；书签同样只在本地匹配，不上传、不索引。
 - 快照以 64 KiB 缓冲流式复制，并在同一搜索会话复用；源文件大小或修改时间变化时刷新。
 - 隐藏窗口、正常退出和下次启动清理本程序自己的快照，不删除其他程序临时文件。
 - 不上传网址、历史或查询词，默认不记录完整查询和历史；第一行地址栏动作只把原始内容交给来源浏览器，实际地址修复或默认搜索由浏览器完成。
@@ -156,7 +166,7 @@ INI 的 `[applications]` 支持：
 
 ## English
 
-Listary Plugin Suite is an unofficial, privacy-focused Listary extension for Windows 10/11 x64. It shows local Chromium browser history and paired Bluetooth devices directly in Listary's dropdown. Bluetooth enumeration and audio-device connection requests run only on demand in short-lived worker processes; there is no background device scan or separate Bluetooth UI.
+Listary Plugin Suite is an unofficial, privacy-focused Listary extension for Windows 10/11 x64. It shows local Chromium browser history, bookmarks and paired Bluetooth devices directly in Listary's dropdown. Bookmarks are searched on demand across every enabled browser via the `bm` keyword and opened by their source browser and profile. Bluetooth enumeration and audio-device connection requests run only on demand in short-lived worker processes; there is no background device scan or separate Bluetooth UI.
 
 Version 2.1.0 adds `end` to select and forcibly terminate a visible application process after confirmation, with **No** selected by default, and fixes keyboard focus for Bluetooth feedback dialogs. Force termination is not a graceful application exit and may lose unsaved work; it affects only the selected process, not a process tree. Existing settings are preserved during upgrades; enable the new module in **Configure Listary** and save if upgrading from an older configuration.
 

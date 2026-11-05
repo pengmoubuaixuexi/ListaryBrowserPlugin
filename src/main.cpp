@@ -2,6 +2,7 @@
 #include "bluetooth_worker.h"
 #include "browser_launcher.h"
 #include "browser_registry.h"
+#include "chromium_bookmark_adapter.h"
 #include "chromium_history_adapter.h"
 #include "config_store.h"
 #include "history_search_service.h"
@@ -409,7 +410,8 @@ private:
     bool CreateSearchControls() {
         if (edit_ && status_ && list_ && configButton_) return true;
         if (!searchService_) {
-            searchService_ = std::make_unique<HistorySearchService>(adapter_, snapshots_,
+            searchService_ = std::make_unique<HistorySearchService>(adapter_, bookmarkAdapter_,
+                snapshots_,
                 [this](SearchResponse&& response) {
                     auto* payload = new SearchResponse(std::move(response));
                     if (!window_ || !PostMessageW(window_, kResultsMessage, 0, reinterpret_cast<LPARAM>(payload))) {
@@ -567,6 +569,11 @@ private:
             SetWindowTextW(status_, InputHint().c_str());
             return;
         }
+        if (config_.bookmarks.enabled &&
+            parsed.prefix == ToLowerInvariant(config_.bookmarks.keyword)) {
+            BeginBookmarkSearch(parsed.query);
+            return;
+        }
         const auto* browser = registry_.FindByPrefix(parsed.prefix);
         if (!browser) {
             ++generation_;
@@ -579,7 +586,29 @@ private:
         results_.clear();
         ListView_DeleteAllItems(list_);
         SetWindowTextW(status_, (L"正在查询 " + browser->name + L"…").c_str());
-        if (searchService_) searchService_->Submit(*browser, parsed.query, config_.maxResults, ++generation_);
+        if (searchService_) {
+            searchService_->Submit({*browser}, parsed.query, config_.maxResults, ++generation_,
+                SearchKind::History);
+        }
+    }
+
+    void BeginBookmarkSearch(const std::wstring& query) {
+        std::vector<BrowserDefinition> browsers;
+        for (const auto& browser : config_.browsers) {
+            if (browser.enabled) browsers.push_back(browser);
+        }
+        results_.clear();
+        ListView_DeleteAllItems(list_);
+        if (browsers.empty()) {
+            SetWindowTextW(status_, L"没有已启用的浏览器，无法搜索书签。");
+            if (searchService_) searchService_->CancelAndCleanup(++generation_);
+            return;
+        }
+        SetWindowTextW(status_, L"正在搜索书签…");
+        if (searchService_) {
+            searchService_->Submit(std::move(browsers), query, config_.maxResults, ++generation_,
+                SearchKind::Bookmarks);
+        }
     }
 
     void ApplyResults(SearchResponse* rawResponse) {
@@ -595,7 +624,9 @@ private:
             row.pszText = const_cast<wchar_t*>(item.title.c_str());
             ListView_InsertItem(list_, &row);
             ListView_SetItemText(list_, static_cast<int>(i), 1, const_cast<wchar_t*>(item.url.c_str()));
-            const std::wstring source = item.browserName + (item.profileDirectory.empty() ? L"" : L":" + item.profileDirectory);
+            const std::wstring source = item.browserName +
+                (item.profileDirectory.empty() ? L"" : L":" + item.profileDirectory) +
+                (item.bookmark ? L" · 书签" : L"");
             ListView_SetItemText(list_, static_cast<int>(i), 2, const_cast<wchar_t*>(source.c_str()));
         }
         if (!results_.empty()) {
@@ -680,6 +711,10 @@ private:
             if (!prefixes.empty()) prefixes += L"、";
             prefixes += browser.prefix;
         }
+        if (config_.bookmarks.enabled) {
+            if (!prefixes.empty()) prefixes += L"、";
+            prefixes += config_.bookmarks.keyword;
+        }
         return prefixes.empty() ? L"尚未启用浏览器，请点击右上角配置 Listary" :
             L"输入 " + prefixes + L"，加空格与关键词";
     }
@@ -698,8 +733,10 @@ private:
         AppConfig candidate = config_;
         const BluetoothConfig originalBluetooth = config_.bluetooth;
         const AppTerminationConfig originalAppTermination = config_.appTermination;
+        const BookmarkConfig originalBookmarks = config_.bookmarks;
         candidate.bluetooth = selections->bluetooth;
         candidate.appTermination = selections->appTermination;
+        candidate.bookmarks = selections->bookmarks;
         std::vector<BrowserDefinition> originalSettings;
         originalSettings.reserve(selections->browsers.size());
         for (const auto& selection : selections->browsers) {
@@ -743,7 +780,7 @@ private:
             StartListary(ignored);
         };
         if (!ConfigStore::SaveListarySettings(configPath_, selections->browsers,
-                selections->bluetooth, selections->appTermination, error)) {
+                selections->bluetooth, selections->appTermination, selections->bookmarks, error)) {
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -752,14 +789,16 @@ private:
         AppConfig reloaded = ConfigStore::Load(configPath_, warning);
         if (!ConfigStore::Validate(reloaded, error)) {
             std::wstring ignored;
-            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, originalAppTermination, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth,
+                originalAppTermination, originalBookmarks, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
         }
         if (!RegisterListaryProtocol(ExecutableDirectory() / L"BrowserHistoryLauncher.exe", error)) {
             std::wstring ignored;
-            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, originalAppTermination, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth,
+                originalAppTermination, originalBookmarks, ignored);
             restartAfterFailure();
             MessageBoxW(window_, error.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -768,7 +807,8 @@ private:
         const auto configured = ListaryConfigurator::Configure(reloaded, preferences, statePath);
         if (!configured.ok) {
             std::wstring ignored;
-            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth, originalAppTermination, ignored);
+            ConfigStore::SaveListarySettings(configPath_, originalSettings, originalBluetooth,
+                originalAppTermination, originalBookmarks, ignored);
             restartAfterFailure();
             MessageBoxW(window_, configured.message.c_str(), L"配置 Listary", MB_OK | MB_ICONERROR);
             return;
@@ -791,6 +831,7 @@ private:
         std::wstring message = L"已一次应用 " + std::to_wstring(enabledCount) +
             L" 个浏览器和" + (config_.bluetooth.enabled ? L"蓝牙模块" : L"已停用的蓝牙模块") +
             L"、" + (config_.appTermination.enabled ? L"强制结束应用模块" : L"已停用的强制结束应用模块") +
+            L"、" + (config_.bookmarks.enabled ? L"书签模块" : L"已停用的书签模块") +
             L"，Listary 只重启了一次。备份：\n" + configured.backupPath.wstring();
         if (!serverStarted) message += L"\n\n建议服务警告：" + serverWarning;
         if (!listaryStarted) message += L"\n\n" + restartWarning;
@@ -813,6 +854,7 @@ private:
     BrowserRegistry registry_;
     SnapshotManager snapshots_;
     ChromiumHistoryAdapter adapter_;
+    ChromiumBookmarkAdapter bookmarkAdapter_;
     std::unique_ptr<HistorySearchService> searchService_;
     std::unique_ptr<ListarySuggestionServer> listaryServer_;
     std::jthread bluetoothThread_;
